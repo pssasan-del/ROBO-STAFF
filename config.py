@@ -16,6 +16,9 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger("fyers_bot")
+# Prevent httpx/httpcore from logging full Telegram URLs (which contain the bot token).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 class Settings:
     # Telegram Security
@@ -30,7 +33,7 @@ class Settings:
 
     # AI Configuration (Primary: Gemini, Fallback: Groq)
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
     
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "").strip()
     GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()

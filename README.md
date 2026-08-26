@@ -235,3 +235,12 @@ The test suite includes 22 unit tests covering:
 1. **FYERS Daily Token Expiration:** FYERS requires generating a new access token every morning before market hours.
 2. **Tick Precision Tolerance:** For Open=High and Open=Low strategies, a default tolerance of `0.05%` is applied to account for opening auction tick variations.
 3. **Personal Single User Security:** Only Telegram messages from `ALLOWED_TELEGRAM_USER_ID` are processed to prevent unauthorized access.
+
+## V4: NIFTY option signal engines
+Two read-only NIFTY option alert engines are included under Telegram -> Saved Strategies:
+- NIFTY Momentum Pro: Fibonacci pivot + EMA20/50 + VWAP + Williams %R + ADX + FYERS option-chain OI profile.
+- NIFTY Fib Reversal Pro: Fib S1/S2 or R1/R2 reversal + Williams %R trigger + EMA9 + ADX + OI profile.
+
+They generate CE_BUY / PE_BUY signal alerts only. They never place an order. FYERS option-chain data is requested from the v3 data endpoint using the existing FYERS app ID and access token.
+
+Historical questions such as `2024 Oct 5 ITC price ethra?` use FYERS daily history first. If the requested date is a weekend/market holiday, the bot states that the previous available trading-day candle was used.

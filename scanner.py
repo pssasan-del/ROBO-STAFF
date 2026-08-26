@@ -16,7 +16,7 @@ class ContinuousScanner:
     Features:
     - Multi-strategy independent scanning
     - Non-blocking execution
-    - 6-hour automatic safety shutoff session timer
+    - Configurable automatic safety shutoff session timer
     - Deduplicated Telegram alert dispatch
     - START, PAUSE, RESUME, STOP controls
     """
@@ -158,26 +158,28 @@ class ContinuousScanner:
     async def run_loop(self):
         """
         Continuous background loop evaluating active strategies.
-        Checks for 6-hour maximum session limit.
+        Checks for configured maximum session limit.
         """
         self._is_running = True
         logger.info("[SCANNER] Background scanner loop initialized")
 
         while self._is_running:
             try:
-                # 1. Check 6-Hour Session Limit
+                # 1. Check configured Session Limit
                 if self._session_start_time and (time.time() - self._session_start_time >= self._max_session_seconds):
-                    logger.warning("[SCANNER] 6-hour continuous session limit reached. Stopping scanners.")
+                    logger.warning(f"[SCANNER] {settings.MAX_SCANNER_SESSION_HOURS}-hour continuous session limit reached. Stopping scanners.")
                     active_count = len(self._scanners)
                     self.stop_all()
                     
                     if self._alert_callback and active_count > 0:
-                        msg = "⏱ *Scanner session automatically stopped after 6 hours of continuous operation.*"
+                        msg = f"⏱ *Scanner session automatically stopped after {settings.MAX_SCANNER_SESSION_HOURS} hours of continuous operation.*"
                         if asyncio.iscoroutinefunction(self._alert_callback):
                             await self._alert_callback(msg)
                         else:
                             self._alert_callback(msg)
-                    break
+                    # Keep the background loop alive so a later START can begin a new session.
+                    await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
+                    continue
 
                 # 2. Iterate through all active running scanners
                 active_scanners = [s for s in self._scanners.values() if s.status == "RUNNING"]

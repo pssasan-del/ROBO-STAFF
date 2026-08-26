@@ -148,6 +148,34 @@ class TechnicalIndicators:
             
         return bool((prev_a >= prev_b) and (curr_a < curr_b))
 
+
+    @staticmethod
+    def williams_r(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        if len(df) < period:
+            return pd.Series(index=df.index, dtype=float)
+        hh = df['high'].rolling(period).max()
+        ll = df['low'].rolling(period).min()
+        denom = (hh - ll).replace(0, np.nan)
+        wr = -100.0 * (hh - df['close']) / denom
+        return wr.fillna(-50.0)
+
+    @staticmethod
+    def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        if len(df) < period + 2:
+            return pd.Series(index=df.index, dtype=float)
+        high, low, close = df['high'], df['low'], df['close']
+        up = high.diff()
+        down = -low.diff()
+        plus_dm = up.where((up > down) & (up > 0), 0.0)
+        minus_dm = down.where((down > up) & (down > 0), 0.0)
+        prev_close = close.shift(1)
+        tr = pd.concat([(high-low), (high-prev_close).abs(), (low-prev_close).abs()], axis=1).max(axis=1)
+        atr = tr.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
+        plus_di = 100 * plus_dm.ewm(alpha=1/period, adjust=False, min_periods=period).mean() / atr.replace(0, np.nan)
+        minus_di = 100 * minus_dm.ewm(alpha=1/period, adjust=False, min_periods=period).mean() / atr.replace(0, np.nan)
+        dx = 100 * (plus_di-minus_di).abs() / (plus_di+minus_di).replace(0, np.nan)
+        return dx.ewm(alpha=1/period, adjust=False, min_periods=period).mean().fillna(0.0)
+
     @staticmethod
     def is_breakout(df: pd.DataFrame, lookback: int = 20) -> bool:
         """

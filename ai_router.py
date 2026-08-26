@@ -1,15 +1,11 @@
-import time
+import asyncio
 import json
-import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from config import settings, logger
 
+
 class AIRouter:
-    """
-    Dual-Provider AI Router:
-    - Primary: Google Gemini
-    - Fallback: Groq (on 429, timeout, quota, or network error)
-    """
+    """Gemini primary + Groq fallback router."""
 
     def __init__(self):
         self._gemini_client = None
@@ -33,80 +29,86 @@ class AIRouter:
                 logger.warning(f"[AI] Failed to initialize Groq client: {e}")
         return self._groq_client
 
-    def generate_response(
+    def _gemini_response(self, prompt: str, system_instruction: Optional[str], json_mode: bool) -> str:
+        client = self._get_gemini_client()
+        if not client:
+            raise RuntimeError("Gemini API key not configured")
+        config_kwargs: Dict[str, Any] = {}
+        if system_instruction:
+            config_kwargs["system_instruction"] = system_instruction
+        if json_mode:
+            config_kwargs["response_mime_type"] = "application/json"
+        response = client.models.generate_content(
+            model=settings.GEMINI_MODEL or "gemini-3.5-flash-lite",
+            contents=prompt,
+            config=config_kwargs if config_kwargs else None,
+        )
+        if not response or not response.text:
+            raise RuntimeError("Gemini returned an empty response")
+        logger.info(f"[AI] Gemini selected ({settings.GEMINI_MODEL})")
+        return response.text.strip()
+
+    def _groq_response(self, prompt: str, system_instruction: Optional[str], json_mode: bool) -> str:
+        client = self._get_groq_client()
+        if not client:
+            raise RuntimeError("Groq API key not configured")
+        messages = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+        messages.append({"role": "user", "content": prompt})
+        kwargs: Dict[str, Any] = {
+            "model": settings.GROQ_MODEL or "llama-3.3-70b-versatile",
+            "messages": messages,
+            "temperature": 0.2 if json_mode else 0.55,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        completion = client.chat.completions.create(**kwargs)
+        content = completion.choices[0].message.content
+        if not content:
+            raise RuntimeError("Groq returned an empty response")
+        logger.info(f"[AI] Groq fallback selected ({settings.GROQ_MODEL})")
+        return content.strip()
+
+    def generate_response(self, prompt: str, system_instruction: Optional[str] = None, json_mode: bool = False) -> str:
+        """Synchronous API used by strategy parsing/tests."""
+        try:
+            return self._gemini_response(prompt, system_instruction, json_mode)
+        except Exception as e:
+            logger.warning(f"[AI] Gemini unavailable ({e}) → Groq fallback")
+        try:
+            return self._groq_response(prompt, system_instruction, json_mode)
+        except Exception as e:
+            logger.error(f"[AI] Groq fallback failed: {e}")
+        if json_mode:
+            return json.dumps({"name":"Quick Strategy","timeframe":"5","universe":"NIFTY50","logic":"AND","conditions":[]})
+        return "AI response unavailable. Please check Gemini/Groq configuration."
+
+    async def generate_response_async(
         self,
         prompt: str,
         system_instruction: Optional[str] = None,
-        json_mode: bool = False
+        json_mode: bool = False,
+        gemini_timeout: float = 12.0,
+        groq_timeout: float = 10.0,
     ) -> str:
-        """
-        Sends prompt to Gemini; automatically falls back to Groq if Gemini fails.
-        """
-        gemini_client = self._get_gemini_client()
-        gemini_model = settings.GEMINI_MODEL or "gemini-2.5-flash"
-        
-        # 1. Try Gemini (Primary)
-        if gemini_client:
-            try:
-                config_kwargs: Dict[str, Any] = {}
-                if system_instruction:
-                    config_kwargs["system_instruction"] = system_instruction
-                if json_mode:
-                    config_kwargs["response_mime_type"] = "application/json"
+        """Non-blocking Telegram AI path. Falls back quickly if Gemini is slow."""
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(self._gemini_response, prompt, system_instruction, json_mode),
+                timeout=gemini_timeout,
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"[AI] Gemini async unavailable/slow ({e}) → Groq fallback")
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._groq_response, prompt, system_instruction, json_mode),
+                timeout=groq_timeout,
+            )
+        except Exception as e:
+            logger.error(f"[AI] Groq async fallback failed: {e}")
+        return "AI response unavailable right now. Please try again in a moment."
 
-                response = gemini_client.models.generate_content(
-                    model=gemini_model,
-                    contents=prompt,
-                    config=config_kwargs if config_kwargs else None
-                )
-                
-                if response and response.text:
-                    logger.info(f"[AI] Gemini selected ({gemini_model})")
-                    return response.text.strip()
-            except Exception as e:
-                err_msg = str(e)
-                logger.warning(f"[AI] Gemini unavailable ({err_msg}) → Groq fallback")
-        else:
-            logger.info("[AI] Gemini API Key not set → attempting Groq fallback")
-
-        # 2. Try Groq (Fallback)
-        groq_client = self._get_groq_client()
-        groq_model = settings.GROQ_MODEL or "llama-3.3-70b-versatile"
-        
-        if groq_client:
-            try:
-                messages = []
-                if system_instruction:
-                    messages.append({"role": "system", "content": system_instruction})
-                messages.append({"role": "user", "content": prompt})
-
-                kwargs: Dict[str, Any] = {
-                    "model": groq_model,
-                    "messages": messages,
-                    "temperature": 0.2 if json_mode else 0.7,
-                }
-                if json_mode:
-                    kwargs["response_format"] = {"type": "json_object"}
-
-                chat_completion = groq_client.chat.completions.create(**kwargs)
-                content = chat_completion.choices[0].message.content
-                if content:
-                    logger.info(f"[AI] Groq fallback selected ({groq_model})")
-                    return content.strip()
-            except Exception as e:
-                logger.error(f"[AI] Groq fallback failed: {e}")
-        else:
-            logger.warning("[AI] Groq API Key not set")
-
-        # 3. Fallback when no external AI keys are configured
-        if json_mode:
-            return json.dumps({
-                "name": "Quick Strategy",
-                "timeframe": "5",
-                "universe": "NIFTY50",
-                "logic": "AND",
-                "conditions": []
-            })
-        return "AI response unavailable. Please check your GEMINI_API_KEY or GROQ_API_KEY environment settings."
 
 ai_router = AIRouter()

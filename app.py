@@ -8,6 +8,7 @@ from storage import storage
 from fyers_service import fyers_service
 from scanner import scanner
 from bot import telegram_bot
+from nifty_option_engine import nifty_option_scanner
 
 
 def run_startup_self_check():
@@ -31,14 +32,18 @@ def run_startup_self_check():
 async def lifespan(app: FastAPI):
     run_startup_self_check()
     scanner.set_alert_callback(telegram_bot.broadcast_alert)
+    nifty_option_scanner.set_alert_callback(telegram_bot.broadcast_alert)
     scanner_task = asyncio.create_task(scanner.run_loop())
+    nifty_option_task = asyncio.create_task(nifty_option_scanner.run_loop())
     telegram_task = asyncio.create_task(telegram_bot.start_polling())
     logger.info("[APP] Telegram-only FYERS AI Market Bot started")
     yield
     logger.info("[APP] Shutting down services...")
     scanner._is_running = False
+    nifty_option_scanner._running = False
     telegram_bot._is_running = False
     scanner_task.cancel()
+    nifty_option_task.cancel()
     telegram_task.cancel()
     await telegram_bot.client.aclose()
 
@@ -55,13 +60,19 @@ def root_endpoint():
     return {"service": "FYERS AI Market Bot", "status": "online", "ui": "telegram", "timestamp": time.time()}
 
 
+@app.head("/")
+def root_head():
+    return None
+
+
 @app.get("/health")
 def health_check():
     return {
         "status": "healthy",
         "telegram_configured": bool(settings.TELEGRAM_BOT_TOKEN),
         "scanner_loop": "running" if scanner._is_running else "idle",
-        "active_scanners": len(scanner.get_active_scanners()),
+        "active_scanners": len(scanner.get_active_scanners()) + len(nifty_option_scanner.status()),
+        "nifty_option_scanners": nifty_option_scanner.status(),
         "mock_mode": settings.MOCK_MARKET_DATA,
         "fyers_healthy": fyers_service.is_healthy(),
     }

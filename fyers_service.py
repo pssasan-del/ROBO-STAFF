@@ -1,6 +1,7 @@
 import time
 import datetime
 import pandas as pd
+import requests
 from config import settings, logger
 from models import StockQuote, MarketStatusOverview
 from symbol_universe import SymbolUniverse
@@ -114,6 +115,74 @@ class FyersService:
         except Exception as e:
             logger.warning(f"[FYERS] History fetch error for {formatted_sym}: {e}")
             raise MarketDataUnavailable(f"FYERS history fetch failed for {formatted_sym}.") from e
+
+
+    def get_history_range(self, symbol: str, timeframe: str, range_from: str, range_to: str) -> pd.DataFrame:
+        formatted_sym = SymbolUniverse.format_symbol(symbol)
+        self._require_live()
+        data = {
+            "symbol": formatted_sym, "resolution": timeframe, "date_format": "1",
+            "range_from": range_from, "range_to": range_to, "cont_flag": "1"
+        }
+        response = self._fyers_model.history(data=data)
+        if response and response.get("s") == "ok" and response.get("candles"):
+            return pd.DataFrame(response["candles"], columns=["timestamp","open","high","low","close","volume"])
+        return pd.DataFrame(columns=["timestamp","open","high","low","close","volume"])
+
+    def get_historical_daily_price(self, symbol: str, date_str: str, nearest_previous: bool = True) -> dict:
+        target = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+        start = target - datetime.timedelta(days=7 if nearest_previous else 0)
+        df = self.get_history_range(symbol, "D", start.strftime("%Y-%m-%d"), target.strftime("%Y-%m-%d"))
+        if df.empty:
+            raise MarketDataUnavailable(f"No FYERS daily candle found for {symbol} on or before {date_str}.")
+        row = df.iloc[-1]
+        candle_date = datetime.datetime.fromtimestamp(float(row.timestamp)).date().isoformat()
+        return {
+            "requested_date": date_str, "trading_date": candle_date, "symbol": SymbolUniverse.format_symbol(symbol),
+            "open": float(row.open), "high": float(row.high), "low": float(row.low), "close": float(row.close), "volume": int(row.volume),
+            "used_previous_trading_day": candle_date != date_str,
+        }
+
+    def get_option_chain(self, symbol: str = "NSE:NIFTY50-INDEX", strikecount: int = 8, timestamp: str = "", greeks: bool = True) -> dict:
+        self._require_live()
+        url = "https://api-t1.fyers.in/data/options-chain-v3"
+        headers = {"Authorization": f"{self.client_id}:{self.access_token}", "Content-Type": "application/json"}
+        params = {"symbol": SymbolUniverse.format_symbol(symbol), "strikecount": min(max(int(strikecount),1),50)}
+        if timestamp:
+            params["timestamp"] = str(timestamp)
+        if greeks:
+            params["greeks"] = "1"
+        r = requests.get(url, headers=headers, params=params, timeout=12)
+        if r.status_code != 200:
+            raise MarketDataUnavailable(f"FYERS option-chain request failed ({r.status_code}).")
+        payload = r.json()
+        if payload.get("s") == "error" or not payload.get("data"):
+            raise MarketDataUnavailable(f"FYERS option-chain returned no valid data: {payload.get('message','unknown error')}")
+        return payload
+
+    @staticmethod
+    def summarize_nifty_oi(payload: dict) -> dict:
+        data = payload.get("data") or {}
+        chain = data.get("optionsChain") or []
+        spot_row = next((x for x in chain if str(x.get("option_type", "")) == ""), {})
+        spot = float(spot_row.get("ltp") or 0)
+        strikes = sorted({float(x.get("strike_price")) for x in chain if x.get("option_type") in ("CE","PE") and x.get("strike_price") is not None})
+        atm = min(strikes, key=lambda x: abs(x-spot)) if strikes and spot else (strikes[len(strikes)//2] if strikes else 0)
+        nearby = [x for x in chain if x.get("option_type") in ("CE","PE") and abs(float(x.get("strike_price",0))-atm) <= 200]
+        call_write = sum(max(float(x.get("oich") or 0),0) for x in nearby if x.get("option_type")=="CE" and float(x.get("ltpch") or 0) <= 0)
+        put_write = sum(max(float(x.get("oich") or 0),0) for x in nearby if x.get("option_type")=="PE" and float(x.get("ltpch") or 0) <= 0)
+        if put_write > call_write * 1.10:
+            bias = "BULLISH"
+        elif call_write > put_write * 1.10:
+            bias = "BEARISH"
+        else:
+            bias = "NEUTRAL"
+        call_oi = float(data.get("callOi") or 0)
+        put_oi = float(data.get("putOi") or 0)
+        pcr = round(put_oi/call_oi, 3) if call_oi else None
+        atm_ce = next((x for x in chain if x.get("option_type")=="CE" and float(x.get("strike_price",0))==atm), None)
+        atm_pe = next((x for x in chain if x.get("option_type")=="PE" and float(x.get("strike_price",0))==atm), None)
+        return {"spot":spot,"atm_strike":atm,"pcr":pcr,"bias":bias,"call_write_oi":call_write,"put_write_oi":put_write,"atm_ce":atm_ce,"atm_pe":atm_pe}
 
     def get_market_overview(self) -> MarketStatusOverview:
         if settings.MOCK_MARKET_DATA:
