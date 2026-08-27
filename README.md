@@ -244,3 +244,12 @@ Two read-only NIFTY option alert engines are included under Telegram -> Saved St
 They generate CE_BUY / PE_BUY signal alerts only. They never place an order. FYERS option-chain data is requested from the v3 data endpoint using the existing FYERS app ID and access token.
 
 Historical questions such as `2024 Oct 5 ITC price ethra?` use FYERS daily history first. If the requested date is a weekend/market holiday, the bot states that the previous available trading-day candle was used.
+
+## v5 edit notes
+- Gemini remains the primary conversational AI; Groq is fallback.
+- FYERS is the source of live/historical market facts. Historical date questions use FYERS daily candles before AI wording.
+- NIFTY strike queries such as `NIFTY 24000 PE current price` query the FYERS option chain first.
+- Saved Strategies keyboard includes NIFTY Momentum, NIFTY Fib Reversal, 200% CALL, 200% PUT, ORB CALL, ORB PUT, and MIXED 44.
+- MIXED 44 uses a dedicated 22 midcap + 22 smallcap pool and can be started/stopped independently.
+- Saved scanners are deterministic and continue without an AI call on every scan; AI is used to parse new natural-language strategies.
+- No order placement / auto trading is implemented.

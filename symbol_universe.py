@@ -98,6 +98,20 @@ NIFTY_100_EXTRA = [
     "NSE:LODHA-EQ"
 ]
 
+
+MIDCAP_22 = [
+    "NSE:HAL-EQ","NSE:BEL-EQ","NSE:DLF-EQ","NSE:INDIGO-EQ","NSE:TVSMOTOR-EQ","NSE:POLYCAB-EQ",
+    "NSE:CHOLAFIN-EQ","NSE:VBL-EQ","NSE:ABB-EQ","NSE:SIEMENS-EQ","NSE:CANBK-EQ","NSE:AMBUJACEM-EQ",
+    "NSE:GODREJCP-EQ","NSE:TORNTPHARM-EQ","NSE:HAVELLS-EQ","NSE:PIDILITIND-EQ","NSE:DABUR-EQ",
+    "NSE:MOTHERSON-EQ","NSE:NAUKRI-EQ","NSE:LODHA-EQ","NSE:GAIL-EQ","NSE:IOC-EQ"
+]
+SMALLCAP_22 = [
+    "NSE:CDSL-EQ","NSE:BSE-EQ","NSE:ANGELONE-EQ","NSE:COCHINSHIP-EQ","NSE:MAZDOCK-EQ","NSE:IRCTC-EQ",
+    "NSE:RVNL-EQ","NSE:IREDA-EQ","NSE:HUDCO-EQ","NSE:NBCC-EQ","NSE:SUZLON-EQ","NSE:HFCL-EQ",
+    "NSE:IDFCFIRSTB-EQ","NSE:FEDERALBNK-EQ","NSE:BANDHANBNK-EQ","NSE:PNB-EQ","NSE:BANKBARODA-EQ",
+    "NSE:NMDC-EQ","NSE:NATIONALUM-EQ","NSE:SAIL-EQ","NSE:NHPC-EQ","NSE:SJVN-EQ"
+]
+
 DEFAULT_WATCHLIST = [
     "NSE:RELIANCE-EQ",
     "NSE:TCS-EQ",
@@ -131,6 +145,8 @@ class SymbolUniverse:
             return list(set(NIFTY_50_SYMBOLS + NIFTY_100_EXTRA))
         elif cleaned in ("WATCHLIST", "MYWATCHLIST"):
             return list(DEFAULT_WATCHLIST)
+        elif cleaned in ("MIDSMALL44", "MIDCAPSMALLCAP44", "MIXED44"):
+            return list(MIDCAP_22 + SMALLCAP_22)
         elif cleaned in ("NIFTY200", "NIFTY500"):
             raise UnsupportedUniverseError(
                 f"{name} is not enabled yet: this build does not ship an unverified partial constituent list. "

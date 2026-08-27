@@ -17,6 +17,7 @@ from alerts import AlertManager
 from indicators import TechnicalIndicators
 from errors import StrategyParseError, MarketDataUnavailable, UnsupportedUniverseError
 from nifty_option_engine import nifty_option_scanner
+from builtin_strategies import stock_strategy
 import datetime
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot"
@@ -80,8 +81,10 @@ class TelegramBot:
     def get_saved_strategy_keyboard(self) -> Dict[str, Any]:
         return {
             "keyboard": [
-                [{"text": "▶ NIFTY Momentum"}, {"text": "⛔ Momentum"}],
-                [{"text": "▶ NIFTY Fib Reversal"}, {"text": "⛔ Fib Reversal"}],
+                [{"text": "▶ NIFTY Momentum"}, {"text": "▶ NIFTY Fib Reversal"}],
+                [{"text": "▶ 200% CALL"}, {"text": "▶ 200% PUT"}],
+                [{"text": "▶ ORB CALL"}, {"text": "▶ ORB PUT"}],
+                [{"text": "▶ MIXED 44"}, {"text": "⛔ Stock Strategies"}],
                 [{"text": "📋 Active Scanners"}, {"text": "⬅ Main"}]
             ],
             "resize_keyboard": True,
@@ -252,6 +255,20 @@ class TelegramBot:
         if lower_t in ("⬅ main", "main"):
             return "🏠 Main controls", self.get_main_keyboard()
 
+        builtin_buttons = {
+            "▶ 200% call": "sure_call", "▶ 200% put": "put",
+            "▶ orb call": "orb_call", "▶ orb put": "orb_put", "▶ mixed 44": "mixed44",
+        }
+        if lower_t in builtin_buttons:
+            strat = stock_strategy(builtin_buttons[lower_t])
+            scanner.add_scanner(strat)
+            return f"▶️ *{strat.name} started*\n{strat.universe} | {strat.timeframe}M | Telegram alerts ON.\nAI is not required for each scan.", self.get_saved_strategy_keyboard()
+        if lower_t == "⛔ stock strategies":
+            stopped = 0
+            for sid in ["builtin_sure_call","builtin_200_put","builtin_orb_call","builtin_orb_put","builtin_mixed44"]:
+                stopped += 1 if scanner.stop_scanner(sid) else 0
+            return f"⛔ *Stock strategy scanners stopped:* {stopped}", self.get_saved_strategy_keyboard()
+
         if lower_t in ("▶ nifty momentum", "start nifty momentum", "nifty momentum start"):
             nifty_option_scanner.start("nifty_momentum_v1")
             return "▶️ *NIFTY Momentum Pro started.*\nFYERS + option-chain OI scanner is ON. Alerts only; no trade execution.", self.get_saved_strategy_keyboard()
@@ -293,6 +310,23 @@ class TelegramBot:
                 system_instruction="You are STAFF BOT connected to FYERS read-only data. Historical price facts must come only from supplied FYERS data. Reply in the user's Malayalam/Manglish/English style."
             )
             return ans, self.get_main_keyboard()
+
+        # NIFTY option strike lookup: FYERS option-chain first, then Gemini wording.
+        opt = re.search(r"\b(\d{4,6})\s*(ce|pe)\b", lower_t)
+        if opt and "nifty" in lower_t:
+            strike, side = float(opt.group(1)), opt.group(2).upper()
+            chain_payload = await asyncio.to_thread(fyers_service.get_option_chain, "NSE:NIFTY50-INDEX", 50, "", True)
+            chain = (chain_payload.get("data") or {}).get("optionsChain") or []
+            rows = [x for x in chain if str(x.get("option_type","")).upper()==side and float(x.get("strike_price") or 0)==strike]
+            if not rows:
+                raise MarketDataUnavailable(f"FYERS option chain did not return NIFTY {int(strike)} {side} in the current chain window/expiry.")
+            row = rows[0]
+            live = f"NIFTY {int(strike)} {side}: LTP={row.get('ltp')} OI={row.get('oi')} OI change={row.get('oich')} IV={row.get('iv')} bid={row.get('bid')} ask={row.get('ask')}"
+            answer = await ai_router.generate_response_async(
+                prompt=f"User asked: {text}\nREAL FYERS OPTION DATA: {live}\nAnswer directly from this data. Do not invent missing expiry information.",
+                system_instruction="You are STAFF BOT connected to FYERS read-only data. Use supplied FYERS option-chain values only. Reply in the user's Malayalam/Manglish/English style."
+            )
+            return answer, self.get_main_keyboard()
 
         # 4. Index live-data questions: FYERS first, AI final answer.
         index_symbol = None
