@@ -5,7 +5,7 @@ from delta_market_service import delta_market_service
 from delta_options_service import delta_options_service
 from config import logger
 
-ALIASES={'bitcoin':'BTCUSD','bit coin':'BTCUSD','btc':'BTCUSD','ethereum':'ETHUSD','etherium':'ETHUSD','ether':'ETHUSD','eth':'ETHUSD'}
+ALIASES={'bitcoin':'BTCUSD','bit coin':'BTCUSD','btc':'BTCUSD','ethereum':'ETHUSD','etherium':'ETHUSD','ether':'ETHUSD','eth':'ETHUSD','gold':'XAUTUSD','xau':'XAUTUSD','xaut':'XAUTUSD','tether gold':'XAUTUSD'}
 PRICE_WORDS=('price','current','live','ltp','rate','premium','ethra','etra','ippo','ഇപ്പോൾ','എത്ര')
 ANALYSIS_WORDS=('rsi','trend','analyse','analysis','buy','sell','support','resistance','signal','entry','target','stop loss','sl','technical','pivot','fibonacci','fib','macd','adx','trix','alligator','supertrend','williams','stoch','bollinger','obv','donchian','roc','atr','vwap')
 OPTION_WORDS=(' ce',' pe','call','put','option','options','strike','premium')
@@ -78,10 +78,11 @@ class MarketAgent:
     async def answer(self,text):
         sym=resolve_symbol(text); wopt=option_q(text); wprice=has(text,PRICE_WORDS); wana=has(text,ANALYSIS_WORDS); requested=indicator_request(text); md='(no market data needed)'
         st=strike(text) if wopt else None; ex=expiry(text) if wopt else None
-        if wopt and sym in {'BTCUSD','ETHUSD'} and st is not None:
-            und='BTC' if sym=='BTCUSD' else 'ETH'
+        if wopt and sym in {'BTCUSD','ETHUSD','XAUTUSD'} and st is not None:
+            und='BTC' if sym=='BTCUSD' else ('ETH' if sym=='ETHUSD' else 'GOLD')
             try:
-                snap=await delta_options_service.get_strike_snapshot(und,st,ex); md=f'DELTA OPTIONS DATA: {snap}'
+                snap=(await delta_options_service.get_gold_strike_snapshot(st,ex)) if und=='GOLD' else (await delta_options_service.get_strike_snapshot(und,st,ex))
+                md=f'DELTA OPTIONS DATA: {snap}'
                 logger.info('[DELTA_TOOL] supplied %s options strike=%s',und,st)
             except Exception as e:md=f'DELTA OPTIONS DATA unavailable: {e}'
         elif wopt and sym:md='Option request detected but strike missing. Ask user for strike.'
@@ -100,10 +101,10 @@ class MarketAgent:
                     a,p,m=directional_values(rows,14)
                     md+=f' 5m RSI14={rsi(cl,14):.2f}; EMA20={ema(cl,20):.4f}; EMA50={ema(cl,50):.4f}; ADX14={a:.2f}; +DI={p:.2f}; -DI={m:.2f}; candles={len(rows)}.'
             except Exception as e:md=f'DELTA MARKET DATA unavailable: {e}'
-        elif (wprice or wana or wopt) and not sym:md='Market question detected but coin unresolved; ask whether BTC or ETH.'
+        elif (wprice or wana or wopt) and not sym:md='Market question detected but asset unresolved; ask whether BTC, ETH or Gold.'
         system=("You are STAFF BOT, a respectful personal crypto-market assistant. Reply in the user's Malayalam/Manglish/English style. "
-                "All live crypto data, candles and BTC/ETH options come from Delta Exchange India public read-only APIs. Deterministic indicator values are calculated by the Python engine from Delta candles. Use supplied values as truth. "
+                "All live market data, candles and BTC/ETH/Gold options come from Delta Exchange India public read-only APIs. Deterministic indicator values are calculated by the Python engine from Delta candles. Use supplied values as truth. "
                 "Never invent prices, pivots, indicator values, Greeks or signals. If Fibonacci pivot data is supplied, quote the exact requested P/R/S level and timeframe, not an approximation. "
-                "For options show expiry, selected strike, CE/Call and PE/Put premiums, and mention nearest strike if exact is false. The app is signal-only and never places orders. Keep answers concise; do not repeat generic warnings unless relevant.")
+                "For options show expiry, selected strike, CE/Call and PE/Put premiums, and mention nearest strike if exact is false. Risk policy: never present a signal below minimum R:R 1:1.85; when entry and stop are known, T1 must be 1:1.85, T2 defaults to 1:2.30 and T3 to 1:3.00 unless market structure requires skipping the signal. The app is signal-only and never places orders. Keep answers concise; do not repeat generic warnings unless relevant.")
         return await ai_router.answer(f'USER: {text}\n\nMARKET DATA:\n{md}\n\nAnswer directly.',system)
 market_agent=MarketAgent()

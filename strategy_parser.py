@@ -10,7 +10,7 @@ SUPPORTED_INDICATORS=[
 SUPPORTED_OPS=['>','>=','<','<=','==','cross_above','cross_below']
 
 SCHEMA_SYSTEM='''You convert human trading strategies into STRICT JSON for a deterministic crypto scanner. No prose, markdown or code fences.
-Allowed symbols: BTCUSD, ETHUSD. Allowed timeframes: 1m,3m,5m,15m,30m,1h,2h,4h,6h,12h,1d.
+Allowed symbols: BTCUSD, ETHUSD, XAUTUSD. Treat GOLD/XAU/XAUT as XAUTUSD. Allowed timeframes: 1m,3m,5m,15m,30m,1h,2h,4h,6h,12h,1d.
 Output exactly: {"name":"...","symbol":"BTCUSD","timeframe":"5m","side":"LONG|SHORT|SIGNAL","rules":[...]}
 Each rule: {"left":{"indicator":"...","period":20},"op":">|>=|<|<=|==|cross_above|cross_below","right":{"type":"value|indicator","value":55,"indicator":"...","period":50,"multiplier":1.0}}
 Allowed indicators: close,open,high,low,ema,sma,rsi,vwap,volume,volume_sma,atr,highest,lowest,previous_high,previous_low,macd,macd_signal,macd_hist,adx,plus_di,minus_di,williams_r,trix,stoch_rsi,bollinger_upper,bollinger_middle,bollinger_lower,obv,donchian_upper,donchian_middle,donchian_lower,roc,alligator_jaw,alligator_teeth,alligator_lips,supertrend,pivot,fib_r1,fib_r2,fib_r3,fib_s1,fib_s2,fib_s3.
@@ -28,7 +28,8 @@ def validate_strategy(d):
     if not isinstance(d,dict): raise ValueError('Strategy must be object')
     name=str(d.get('name') or 'Custom Strategy').strip()[:60]
     symbol=str(d.get('symbol') or '').upper().replace('/','').replace('USDT','USD')
-    if symbol not in {'BTCUSD','ETHUSD'}: raise ValueError('Only BTCUSD/ETHUSD supported in V8')
+    aliases={'GOLD':'XAUTUSD','XAU':'XAUTUSD','XAUT':'XAUTUSD'}; symbol=aliases.get(symbol,symbol)
+    if symbol not in {'BTCUSD','ETHUSD','XAUTUSD'}: raise ValueError('Only BTCUSD/ETHUSD/XAUTUSD (Gold) supported in V9')
     tf=str(d.get('timeframe') or '').lower()
     if tf not in {'1m','3m','5m','15m','30m','1h','2h','4h','6h','12h','1d'}: raise ValueError('Unsupported timeframe')
     side=str(d.get('side') or 'SIGNAL').upper()

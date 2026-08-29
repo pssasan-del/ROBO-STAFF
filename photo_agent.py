@@ -7,7 +7,7 @@ from config import logger
 VISION_SYSTEM='''You inspect trading screenshots sent to a personal crypto assistant. Return STRICT JSON only, no markdown.
 Classify image_type as one of: strategy, option_chain, position, chart, pnl_order, other.
 Extract only clearly visible facts. Never guess hidden values.
-Schema: {"image_type":"...","question":"","symbol":"BTCUSD|ETHUSD|UNKNOWN","underlying":"BTC|ETH|UNKNOWN","strike":null,"option_side":"CE|PE|UNKNOWN","expiry":null,"visible":{},"strategy_text":"","confidence":0.0}
+Schema: {"image_type":"...","question":"","symbol":"BTCUSD|ETHUSD|XAUTUSD|UNKNOWN","underlying":"BTC|ETH|XAUT|PAXG|GOLD|UNKNOWN","strike":null,"option_side":"CE|PE|UNKNOWN","expiry":null,"visible":{},"strategy_text":"","confidence":0.0}
 For strategy screenshots, put a concise faithful transcription of the visible rules in strategy_text.
 For position screenshots, visible may contain side, entry, ltp, qty, pnl, leverage, liquidation, stop_loss, target when actually visible.
 For option_chain screenshots, visible may contain strikes/premiums/OI/IV when actually visible.
@@ -23,14 +23,15 @@ def _norm_symbol(v):
     s=str(v or '').upper().replace('/','').replace('-','')
     if s in {'BTC','BTCUSDT'}:return 'BTCUSD'
     if s in {'ETH','ETHUSDT'}:return 'ETHUSD'
-    return s if s in {'BTCUSD','ETHUSD'} else None
+    if s in {'GOLD','XAU','XAUT','XAUTUSDT'}:return 'XAUTUSD'
+    return s if s in {'BTCUSD','ETHUSD','XAUTUSD'} else None
 
 class PhotoAgent:
     async def inspect(self,data:bytes,mime:str,caption=''):
         raw=await ai_router.inspect_image(data,mime,'Caption/question from user: '+(caption or '(none)')+'\nClassify and extract visible trading facts.',VISION_SYSTEM)
         d=_json(raw);d['image_type']=str(d.get('image_type') or 'other').lower();d['symbol']=_norm_symbol(d.get('symbol'))
-        if d.get('underlying') not in {'BTC','ETH'}:
-            d['underlying']='BTC' if d['symbol']=='BTCUSD' else ('ETH' if d['symbol']=='ETHUSD' else None)
+        if d.get('underlying') not in {'BTC','ETH','XAUT','PAXG','GOLD'}:
+            d['underlying']='BTC' if d['symbol']=='BTCUSD' else ('ETH' if d['symbol']=='ETHUSD' else ('GOLD' if d['symbol']=='XAUTUSD' else None))
         try:d['strike']=float(d['strike']) if d.get('strike') is not None else None
         except:d['strike']=None
         logger.info('[PHOTO] type=%s symbol=%s strike=%s confidence=%s',d['image_type'],d.get('symbol'),d.get('strike'),d.get('confidence'))
@@ -43,9 +44,15 @@ class PhotoAgent:
         sym=d.get('symbol')
         try:
             if d['image_type']=='option_chain' and d.get('underlying') and d.get('strike'):
-                snap=await delta_options_service.get_strike_snapshot(d['underlying'],d['strike'],d.get('expiry'));live='DELTA LIVE OPTIONS: '+repr(snap)
+                snap=(await delta_options_service.get_gold_strike_snapshot(d['strike'],d.get('expiry'))) if d['underlying'] in {'GOLD','XAUT','PAXG'} else (await delta_options_service.get_strike_snapshot(d['underlying'],d['strike'],d.get('expiry')));live='DELTA LIVE OPTIONS: '+repr(snap)
             elif sym:
                 q=await delta_market_service.get_ticker(sym);live='DELTA LIVE TICKER: '+repr(q)
+                vis=d.get('visible') if isinstance(d.get('visible'),dict) else {}
+                if d['image_type']=='position' and vis.get('entry') is not None and vis.get('stop_loss') is not None and str(vis.get('side') or '').upper() in {'LONG','SHORT'}:
+                    try:
+                        from strategy_engine import risk_reward_targets
+                        live+='; RR TARGETS: '+repr(risk_reward_targets(float(vis['entry']),float(vis['stop_loss']),str(vis['side']).upper()))
+                    except Exception: pass
                 if d['image_type']=='chart':
                     rows=await delta_market_service.get_candles(sym,'5m',80);live+=f'; DELTA 5m candles last={rows[-5:] if rows else []}'
         except Exception as e:

@@ -6,7 +6,7 @@ from config import settings, logger
 class DeltaMarketService:
     """Delta Exchange India PUBLIC market data only. No API keys and no order methods."""
     def __init__(self):
-        self.client=httpx.AsyncClient(timeout=httpx.Timeout(12,connect=8),headers={'Accept':'application/json','User-Agent':'DeltaCryptoAIBot/5.0'})
+        self.client=httpx.AsyncClient(timeout=httpx.Timeout(12,connect=8),headers={'Accept':'application/json','User-Agent':'DeltaCryptoAIBot/9.0'})
         self.cache:Dict[str,dict]={}
         self.ws_connected=False
         self.running=True
@@ -16,7 +16,7 @@ class DeltaMarketService:
     @staticmethod
     def normalize_symbol(symbol:str)->str:
         s=(symbol or '').upper().replace('/','').replace('-','')
-        aliases={'BTC':'BTCUSD','BTCUSDT':'BTCUSD','XBT':'BTCUSD','ETH':'ETHUSD','ETHUSDT':'ETHUSD'}
+        aliases={'BTC':'BTCUSD','BTCUSDT':'BTCUSD','XBT':'BTCUSD','ETH':'ETHUSD','ETHUSDT':'ETHUSD','GOLD':'XAUTUSD','XAU':'XAUTUSD','XAUT':'XAUTUSD','XAUTUSDT':'XAUTUSD','PAXG':'PAXGUSD','PAXGUSDT':'PAXGUSD'}
         return aliases.get(s,s)
 
     @staticmethod

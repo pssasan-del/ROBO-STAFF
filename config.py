@@ -18,7 +18,7 @@ class Settings:
     GROQ_MODEL: str = os.getenv('GROQ_MODEL','llama-3.3-70b-versatile').strip()
     DELTA_REST_BASE: str = os.getenv('DELTA_REST_BASE','https://api.india.delta.exchange').rstrip('/')
     DELTA_PUBLIC_WS_URL: str = os.getenv('DELTA_PUBLIC_WS_URL','wss://public-socket.india.delta.exchange').strip()
-    DELTA_SYMBOLS: str = os.getenv('DELTA_SYMBOLS','BTCUSD,ETHUSD').strip()
+    DELTA_SYMBOLS: str = os.getenv('DELTA_SYMBOLS','BTCUSD,ETHUSD,XAUTUSD').strip()
     DATABASE_URL: str = os.getenv('DATABASE_URL','').strip()
     SQLITE_PATH: str = os.getenv('SQLITE_PATH','data/strategies.db').strip()
     SCAN_INTERVAL_SECONDS: int = int(os.getenv('SCAN_INTERVAL_SECONDS','30'))
@@ -26,6 +26,9 @@ class Settings:
     MAX_SAVED_STRATEGIES: int = int(os.getenv('MAX_SAVED_STRATEGIES','100'))
     MAX_ACTIVE_STRATEGIES: int = int(os.getenv('MAX_ACTIVE_STRATEGIES','10'))
     MIN_RR: float = float(os.getenv('MIN_RR','1.85'))
+    RR_T1: float = float(os.getenv('RR_T1','1.85'))
+    RR_T2: float = float(os.getenv('RR_T2','2.30'))
+    RR_T3: float = float(os.getenv('RR_T3','3.00'))
     HEARTBEAT_SECONDS: int = int(os.getenv('HEARTBEAT_SECONDS','60'))
 
     def allowed_user_ids(self):

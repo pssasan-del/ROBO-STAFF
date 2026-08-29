@@ -15,7 +15,7 @@ class DeltaOptionsService:
     def __init__(self):
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(12.0, connect=8.0),
-            headers={"Accept": "application/json", "User-Agent": "DeltaCryptoAIBot/5.0"},
+            headers={"Accept": "application/json", "User-Agent": "DeltaCryptoAIBot/9.0"},
         )
 
     @staticmethod
@@ -59,8 +59,8 @@ class DeltaOptionsService:
 
     async def get_chain(self, underlying: str, expiry: Optional[str] = None):
         underlying = underlying.upper()
-        if underlying not in {"BTC", "ETH"}:
-            raise ValueError("Delta India options connector currently supports BTC and ETH")
+        if underlying not in {"BTC", "ETH", "XAUT", "PAXG"}:
+            raise ValueError("Delta India options connector supports BTC, ETH and Gold underlyings XAUT/PAXG")
         params = {
             "contract_types": "call_options,put_options",
             "underlying_asset_symbols": underlying,
@@ -181,6 +181,22 @@ class DeltaOptionsService:
             "pe": pe,
             "source": "Delta Exchange India public options ticker API",
         }
+
+    async def get_gold_strike_snapshot(self, strike: float, expiry: Optional[str] = None):
+        """Resolve Gold options without hard-coding one RWA family forever.
+
+        Delta advertises Gold options on tokenized Gold products. We try XAUT first
+        (the bot's default Gold market symbol is XAUTUSD), then PAXG.
+        """
+        errors=[]
+        for underlying in ("XAUT", "PAXG"):
+            try:
+                snap=await self.get_strike_snapshot(underlying,strike,expiry)
+                snap["asset_label"]="GOLD"
+                return snap
+            except Exception as exc:
+                errors.append(f"{underlying}: {exc}")
+        raise RuntimeError("Gold option chain unavailable from Delta: "+" | ".join(errors))
 
 
 delta_options_service = DeltaOptionsService()

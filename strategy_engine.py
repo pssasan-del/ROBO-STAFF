@@ -145,6 +145,27 @@ def fibonacci_pivots(row):
     h,l,c=float(row['high']),float(row['low']),float(row['close']);p=(h+l+c)/3;r=h-l
     return {'pivot':p,'fib_r1':p+0.382*r,'fib_r2':p+0.618*r,'fib_r3':p+r,'fib_s1':p-0.382*r,'fib_s2':p-0.618*r,'fib_s3':p-r}
 
+def risk_reward_targets(entry: float, stop: float, side: str, rr1: float = None, rr2: float = None, rr3: float = None):
+    """Deterministic target prices from entry/stop. T1 is never below the configured 1:1.85 floor."""
+    entry=float(entry); stop=float(stop); side=str(side or '').upper()
+    rr1=settings.RR_T1 if rr1 is None else float(rr1)
+    rr2=settings.RR_T2 if rr2 is None else float(rr2)
+    rr3=settings.RR_T3 if rr3 is None else float(rr3)
+    if rr1 < settings.MIN_RR:
+        raise ValueError(f'T1 R:R {rr1:g} is below minimum {settings.MIN_RR:g}')
+    risk=abs(entry-stop)
+    if risk <= 0: raise ValueError('Entry and stop must be different')
+    if side=='LONG':
+        if stop>=entry: raise ValueError('LONG stop must be below entry')
+        sign=1.0
+    elif side=='SHORT':
+        if stop<=entry: raise ValueError('SHORT stop must be above entry')
+        sign=-1.0
+    else: raise ValueError('side must be LONG or SHORT')
+    return {'entry':entry,'stop':stop,'risk':risk,'rr_min':settings.MIN_RR,'t1_rr':rr1,'t2_rr':rr2,'t3_rr':rr3,
+            't1':entry+sign*risk*rr1,'t2':entry+sign*risk*rr2,'t3':entry+sign*risk*rr3}
+
+
 class StrategyEngine:
     def __init__(self): self.alert_cb=None; self.last_alert={}; self.last_scan={}; self.running=True; self.last_loop_heartbeat=0.0; self.last_scan_at=0.0
     def set_alert_callback(self,cb):self.alert_cb=cb

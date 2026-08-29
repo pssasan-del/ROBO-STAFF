@@ -16,7 +16,7 @@ class TelegramBot:
         self.pending={}  # uid -> {'mode':'create|edit','sid':optional,'parsed':optional,'source':str}
     def auth(self,u):return not settings.allowed_user_ids() or u in settings.allowed_user_ids()
     def kb(self):
-        return {'keyboard':[[{'text':'₿ BTC Price'},{'text':'Ξ ETH Price'}],[{'text':'🧾 BTC Options'},{'text':'🧾 ETH Options'}],[{'text':'➕ Create Strategy'},{'text':'💾 Saved Strategies'}],[{'text':'🔎 Scan Active Now'},{'text':'📊 Status'}],[{'text':'⛔ Stop All Strategies'}]],'resize_keyboard':True,'is_persistent':True}
+        return {'keyboard':[[{'text':'₿ BTC Price'},{'text':'Ξ ETH Price'},{'text':'🥇 Gold Price'}],[{'text':'🧾 BTC Options'},{'text':'🧾 ETH Options'},{'text':'🧾 Gold Options'}],[{'text':'➕ Create Strategy'},{'text':'💾 Saved Strategies'}],[{'text':'🔎 Scan Active Now'},{'text':'📊 Status'}],[{'text':'⛔ Stop All Strategies'}]],'resize_keyboard':True,'is_persistent':True}
     @staticmethod
     def inline(rows):return {'inline_keyboard':rows}
     async def _post(self,method,payload):
@@ -125,15 +125,18 @@ class TelegramBot:
     async def process_text(self,uid,chat,text):
         t=text.lower().strip()
         if t in ['/start','start','help']:
-            return await self.send(chat,'👋 *Delta Crypto AI Bot V8*\n\nDelta-only public market data + Gemini. BTC/ETH live data, options and custom saved strategy scanning. No order execution.',self.kb())
+            return await self.send(chat,'👋 *Delta Crypto AI Bot V9*\n\nDelta-only public market data + Gemini. BTC/ETH/Gold live data, options and custom saved strategy scanning. No order execution.',self.kb())
         if t in ['₿ btc price','btc price']:
             q=await delta_market_service.get_ticker('BTCUSD');return await self.send(chat,f"₿ BTC/USD: *${q['price']:,.2f}*\nSource: Delta public market data",self.kb())
         if t in ['ξ eth price','eth price']:
             q=await delta_market_service.get_ticker('ETHUSD');return await self.send(chat,f"Ξ ETH/USD: *${q['price']:,.2f}*\nSource: Delta public market data",self.kb())
+        if t in ['🥇 gold price','gold price','xaut price']:
+            q=await delta_market_service.get_ticker('XAUTUSD');return await self.send(chat,f"🥇 GOLD/XAUT: *${q['price']:,.2f}*\nSource: Delta public market data",self.kb())
         if t in ['🧾 btc options','btc options']:return await self.send(chat,'Ask like: *BTC 77500 CE and PE rate* — nearest expiry is used if expiry is omitted.',self.kb())
         if t in ['🧾 eth options','eth options']:return await self.send(chat,'Ask like: *ETH 2500 CE and PE rate*.',self.kb())
+        if t in ['🧾 gold options','gold options','xaut options']:return await self.send(chat,'Ask like: *Gold 4200 CE and PE rate* — the connector tries Delta Gold option families and uses nearest expiry when omitted.',self.kb())
         if t in ['➕ create strategy','create strategy','new strategy']:
-            self.pending[uid]={'mode':'create_wait'};return await self.send(chat,'➕ Send your strategy now as *text, Telegram photo/screenshot, TXT/MD/JSON or PDF*.\n\nExample: `BTC 5m, LONG: EMA20 > EMA50, RSI14 > 55, close > VWAP, volume > 1.5x volume SMA20`\n\nGemini will parse → you check Preview → Save.')
+            self.pending[uid]={'mode':'create_wait'};return await self.send(chat,'➕ Send your strategy now as *text, Telegram photo/screenshot, TXT/MD/JSON or PDF*.\n\nExample: `Gold 5m, LONG: Alligator Lips > Teeth > Jaw, TRIX15 > 0, ADX14 > 20, close > Fib R1`\n\nGemini will parse → you check Preview → Save.')
         if t in ['💾 saved strategies','saved strategies','strategies','/strategies']:return await self.strategy_page(uid,chat,0)
         if t in ['⛔ stop all strategies','stop all','stop strategies']:
             for r in strategy_store.list(uid):
@@ -142,7 +145,7 @@ class TelegramBot:
         if t in ['🔎 scan active now','scan now']:
             res=await engine.scan_once(uid);return await self.send(chat,'🔎 Active scan complete. '+('No active strategies.' if not res else ' | '.join(f"#{k}: {v.get('status')}" for k,v in res.items())),self.kb())
         if t in ['📊 status','status']:
-            return await self.send(chat,f"📊 *STATUS*\nDelta REST: 🟢 PUBLIC\nDelta WS: {'🟢' if delta_market_service.ws_connected else '🟡 reconnecting / REST fallback'}\nSaved: {strategy_store.count(uid)}/{settings.MAX_SAVED_STRATEGIES}\nActive: {strategy_store.active_count(uid)}/{settings.MAX_ACTIVE_STRATEGIES}\nGemini: {'🟢' if settings.GEMINI_API_KEY else '🔴'}\nPhoto intelligence: 🟢 strategy / option chain / position / chart\nHeartbeat/reconnect: 🟢\nAuto-trading: DISABLED",self.kb())
+            return await self.send(chat,f"📊 *STATUS*\nDelta REST: 🟢 PUBLIC\nDelta WS: {'🟢' if delta_market_service.ws_connected else '🟡 reconnecting / REST fallback'}\nSaved: {strategy_store.count(uid)}/{settings.MAX_SAVED_STRATEGIES}\nActive: {strategy_store.active_count(uid)}/{settings.MAX_ACTIVE_STRATEGIES}\nGemini: {'🟢' if settings.GEMINI_API_KEY else '🔴'}\nAssets: BTC / ETH / GOLD (XAUT)\nMin R:R: 1:1.85 • T1 1:1.85 • T2 1:2.30 • T3 1:3.00\nPhoto intelligence: 🟢 strategy / option chain / position / chart\nHeartbeat/reconnect: 🟢\nAuto-trading: DISABLED",self.kb())
         pend=self.pending.get(uid) or {}
         if pend.get('mode') in {'create_wait','edit_wait'}:
             return await self.parse_text_strategy(uid,chat,text,pend.get('sid'))
