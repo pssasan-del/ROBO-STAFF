@@ -23,3 +23,17 @@ Start: `uvicorn app:app --host 0.0.0.0 --port $PORT`
 Required env: `TELEGRAM_BOT_TOKEN`, `ALLOWED_TELEGRAM_USER_ID`, `GEMINI_API_KEY`. Optional: `GROQ_API_KEY`.
 
 No Mudrex key/token/TOTP is required for this market-data-only version.
+
+
+## V2 Mudrex connector fix (2026-08-29)
+
+This build follows Mudrex public market-data v1.0.9 conventions:
+
+- REST base: `https://trade.mudrex.com/fapi/v1/price`
+- Historical endpoint: `/kline`
+- REST symbols: `BTC/USDT`, `ETH/USDT`
+- Mudrex interval aliases are translated automatically (`5m -> 5t`, `15m -> 15t`).
+- WebSocket ticker: `ticker@5s` with assets such as `btcusdt`, `ethusdt`.
+- WebSocket ticker payload arrays are parsed correctly (`data: [{s,p,mp}, ...]`).
+- REST failures now log HTTP status and Mudrex response body for fast Render debugging.
+- Still public/read-only and signal-only. No Mudrex API secret is required.
