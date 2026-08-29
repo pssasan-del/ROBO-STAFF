@@ -15,7 +15,7 @@ class DeltaOptionsService:
     def __init__(self):
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(12.0, connect=8.0),
-            headers={"Accept": "application/json", "User-Agent": "MudrexDeltaCryptoBot/4.0"},
+            headers={"Accept": "application/json", "User-Agent": "DeltaCryptoAIBot/5.0"},
         )
 
     @staticmethod

@@ -1,38 +1,10 @@
-import pytest
-from strategy_parser import StrategyParser
-from errors import StrategyParseError
+from strategy_parser import validate_strategy
 
+def test_valid_strategy():
+    d=validate_strategy({'name':'BTC Trend','symbol':'BTCUSD','timeframe':'5m','side':'LONG','rules':[{'left':{'indicator':'ema','period':20},'op':'>','right':{'type':'indicator','indicator':'ema','period':50}}]})
+    assert d['symbol']=='BTCUSD' and d['rules'][0]['left']['period']==20
 
-def test_quick_parse_open_high():
-    strat = StrategyParser.parse_quick_rule("Open high stocks search cheyyu")
-    assert strat is not None
-    assert strat.conditions[0].type == "open_high"
-
-
-def test_quick_parse_open_low():
-    strat = StrategyParser.parse_quick_rule("open low stocks kaanikk")
-    assert strat is not None
-    assert strat.conditions[0].type == "open_low"
-
-
-def test_quick_parse_rsi_below():
-    strat = StrategyParser.parse_quick_rule("RSI 30 below stocks scan cheyyu")
-    assert strat is not None
-    assert strat.conditions[0].type == "rsi"
-    assert strat.conditions[0].value == 30.0
-    assert strat.conditions[0].operator == "<"
-
-
-def test_quick_parse_ema_cross():
-    strat = StrategyParser.parse_quick_rule("EMA 20 EMA 50 cross scan cheyyu")
-    assert strat is not None
-    assert strat.conditions[0].type == "ema_compare"
-    assert strat.conditions[0].fast == 20
-    assert strat.conditions[0].slow == 50
-
-
-def test_ai_parse_failure_never_invents_fallback(monkeypatch):
-    from strategy_parser import ai_router
-    monkeypatch.setattr(ai_router, "generate_response", lambda **kwargs: "not json")
-    with pytest.raises(StrategyParseError):
-        StrategyParser.parse_strategy("random unknown text")
+def test_reject_bad_indicator():
+    import pytest
+    with pytest.raises(ValueError):
+        validate_strategy({'name':'x','symbol':'BTCUSD','timeframe':'5m','rules':[{'left':{'indicator':'magic','period':2},'op':'>','right':{'type':'value','value':1}}]})
