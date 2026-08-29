@@ -125,7 +125,7 @@ class TelegramBot:
     async def process_text(self,uid,chat,text):
         t=text.lower().strip()
         if t in ['/start','start','help']:
-            return await self.send(chat,'👋 *Delta Crypto AI Bot V7*\n\nDelta-only public market data + Gemini. BTC/ETH live data, options and custom saved strategy scanning. No order execution.',self.kb())
+            return await self.send(chat,'👋 *Delta Crypto AI Bot V8*\n\nDelta-only public market data + Gemini. BTC/ETH live data, options and custom saved strategy scanning. No order execution.',self.kb())
         if t in ['₿ btc price','btc price']:
             q=await delta_market_service.get_ticker('BTCUSD');return await self.send(chat,f"₿ BTC/USD: *${q['price']:,.2f}*\nSource: Delta public market data",self.kb())
         if t in ['ξ eth price','eth price']:

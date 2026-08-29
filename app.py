@@ -28,7 +28,7 @@ async def lifespan(app:FastAPI):
     strategy_store.init()
     restored=len(strategy_store.list_active())
     print('\n'+'='*58)
-    print(' DELTA CRYPTO AI BOT V6 - STRATEGY + RECOVERY')
+    print(' DELTA CRYPTO AI BOT V8 - ADVANCED INDICATORS')
     print('='*58)
     print(' [DELTA] Public market data + options: NO API KEY REQUIRED')
     print(f' [SYMBOLS] {settings.delta_symbols()}')
@@ -48,16 +48,16 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(engine.loop(),name='strategy-engine'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] Delta-only crypto AI bot V6 started; restored_active=%s',restored)
+    logger.info('[APP] Delta-only crypto AI bot V8 started; restored_active=%s',restored)
     yield
     telegram_bot.running=False;engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
     await asyncio.gather(*tasks,return_exceptions=True)
     await telegram_bot.client.aclose();await delta_market_service.close();await delta_options_service.client.aclose()
 
-app=FastAPI(title='Delta Crypto AI Bot V6',lifespan=lifespan)
+app=FastAPI(title='Delta Crypto AI Bot V8',lifespan=lifespan)
 @app.get('/')
-def root():return {'service':'Delta Crypto AI Bot V6','status':'online','mode':'signal-only','provider':'Delta Exchange India public APIs','timestamp':time.time()}
+def root():return {'service':'Delta Crypto AI Bot V8','status':'online','mode':'signal-only','provider':'Delta Exchange India public APIs','timestamp':time.time()}
 @app.head('/')
 def head():return None
 @app.get('/health')

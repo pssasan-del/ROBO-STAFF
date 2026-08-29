@@ -1,8 +1,8 @@
-# Delta Crypto AI Bot V6 — Delta-only + AI Strategy Builder
+# Delta Crypto AI Bot V8 — Delta-only + Advanced Indicator Engine
 
 Telegram-only, signal-only personal crypto market bot. **Mudrex has been removed.** Market data, historical candles and BTC/ETH options come from Delta Exchange India public read-only APIs. No trading/order methods are included.
 
-## V6 architecture
+## Architecture
 
 `Telegram -> Gemini intent/strategy parser -> Delta public market data -> deterministic Python strategy engine -> Telegram alerts`
 
@@ -22,7 +22,7 @@ Gemini is used when you **create/edit a strategy** and for conversational answer
 - Alert cooldown
 - Signal-only; no order placement
 
-## Supported deterministic rule vocabulary in V6
+## Deterministic rule vocabulary
 
 Indicators: `close, open, high, low, EMA, SMA, RSI, VWAP, volume, volume SMA, ATR, highest(N), lowest(N), previous high, previous low`.
 Operators: `>, >=, <, <=, ==, cross_above, cross_below`.
@@ -32,7 +32,7 @@ A strategy using an unsupported indicator is rejected instead of silently approx
 
 ## Persistent storage
 
-Set `DATABASE_URL` to a PostgreSQL connection string for persistent saved strategies. If it is absent, V6 falls back to `data/strategies.db` SQLite. **Render free filesystem is ephemeral**, so SQLite can disappear on redeploy/restart/spindown. For real persistence, use PostgreSQL or a persistent disk.
+Set `DATABASE_URL` to a PostgreSQL connection string for persistent saved strategies. If it is absent, V8 falls back to `data/strategies.db` SQLite. **Render free filesystem is ephemeral**, so SQLite can disappear on redeploy/restart/spindown. For real persistence, use PostgreSQL or a persistent disk.
 
 ## Render environment variables
 
@@ -77,3 +77,8 @@ Optional env: `HEARTBEAT_SECONDS=60`.
 
 ## V7 general photo intelligence
 Telegram photos outside Create/Edit Strategy are classified by Gemini Vision as strategy, option chain, position, chart, P&L/order, or other. BTC/ETH screenshots are enriched with Delta public live data when the symbol/strike is reliably extracted. Screenshot values are treated as potentially stale and missing values are never invented. Strategy screenshots still go through Preview -> explicit Save before persistence. No order execution is present.
+
+
+## V8 indicator engine
+Added deterministic indicator support: Fibonacci Pivot P/R1-R3/S1-S3, MACD, ADX/+DI/-DI, Williams %R, Supertrend, Williams Alligator, TRIX, Stochastic RSI, Bollinger Bands, OBV, Donchian Channel, ROC, plus existing EMA/SMA/RSI/VWAP/Volume/ATR/breakout rules.
+Indicator questions such as `BTC 5min Fib R1 ethra?`, `BTC Alligator 5m`, or `ETH TRIX 15m` now fetch Delta candles and calculate the requested values in Python before Gemini answers.

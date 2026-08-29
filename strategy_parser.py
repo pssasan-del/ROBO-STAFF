@@ -2,14 +2,20 @@ import json, re
 from ai_router import ai_router
 from config import logger
 
-SUPPORTED_INDICATORS=['close','open','high','low','ema','sma','rsi','vwap','volume','volume_sma','atr','highest','lowest','previous_high','previous_low']
+SUPPORTED_INDICATORS=[
+'close','open','high','low','ema','sma','rsi','vwap','volume','volume_sma','atr','highest','lowest','previous_high','previous_low',
+'macd','macd_signal','macd_hist','adx','plus_di','minus_di','williams_r','trix','stoch_rsi','bollinger_upper','bollinger_middle','bollinger_lower',
+'obv','donchian_upper','donchian_middle','donchian_lower','roc','alligator_jaw','alligator_teeth','alligator_lips','supertrend',
+'pivot','fib_r1','fib_r2','fib_r3','fib_s1','fib_s2','fib_s3']
 SUPPORTED_OPS=['>','>=','<','<=','==','cross_above','cross_below']
 
 SCHEMA_SYSTEM='''You convert human trading strategies into STRICT JSON for a deterministic crypto scanner. No prose, markdown or code fences.
 Allowed symbols: BTCUSD, ETHUSD. Allowed timeframes: 1m,3m,5m,15m,30m,1h,2h,4h,6h,12h,1d.
 Output exactly: {"name":"...","symbol":"BTCUSD","timeframe":"5m","side":"LONG|SHORT|SIGNAL","rules":[...]}
-Each rule: {"left":{"indicator":"ema|sma|rsi|vwap|close|open|high|low|volume|volume_sma|atr|highest|lowest|previous_high|previous_low","period":20},"op":">|>=|<|<=|==|cross_above|cross_below","right":{"type":"value|indicator","value":55,"indicator":"...","period":50,"multiplier":1.0}}
-Omit period where not needed. For phrases like volume > 1.5x average volume 20, use left volume and right indicator volume_sma period20 multiplier1.5. For 20-candle breakout use close > highest period20. Never create unsupported indicators. Keep 1-12 rules.''' 
+Each rule: {"left":{"indicator":"...","period":20},"op":">|>=|<|<=|==|cross_above|cross_below","right":{"type":"value|indicator","value":55,"indicator":"...","period":50,"multiplier":1.0}}
+Allowed indicators: close,open,high,low,ema,sma,rsi,vwap,volume,volume_sma,atr,highest,lowest,previous_high,previous_low,macd,macd_signal,macd_hist,adx,plus_di,minus_di,williams_r,trix,stoch_rsi,bollinger_upper,bollinger_middle,bollinger_lower,obv,donchian_upper,donchian_middle,donchian_lower,roc,alligator_jaw,alligator_teeth,alligator_lips,supertrend,pivot,fib_r1,fib_r2,fib_r3,fib_s1,fib_s2,fib_s3.
+Defaults: RSI14, ADX14, Williams%R14, TRIX15, StochRSI14, Bollinger20/2, Donchian20, ROC12, Supertrend10/3, Alligator standard Jaw13 shift8 / Teeth8 shift5 / Lips5 shift3. For Supertrend multiplier means ATR factor; otherwise multiplier means numeric rule multiplier.
+For phrases like volume > 1.5x average volume 20, use left volume and right indicator volume_sma period20 multiplier1.5. For 20-candle breakout use close > highest period20. For bullish Alligator use alligator_lips > alligator_teeth AND alligator_teeth > alligator_jaw. For Fib R1 use fib_r1. Never invent unsupported indicators. Keep 1-12 rules.'''
 
 
 def _extract_json(raw:str):
@@ -22,7 +28,7 @@ def validate_strategy(d):
     if not isinstance(d,dict): raise ValueError('Strategy must be object')
     name=str(d.get('name') or 'Custom Strategy').strip()[:60]
     symbol=str(d.get('symbol') or '').upper().replace('/','').replace('USDT','USD')
-    if symbol not in {'BTCUSD','ETHUSD'}: raise ValueError('Only BTCUSD/ETHUSD supported in V5')
+    if symbol not in {'BTCUSD','ETHUSD'}: raise ValueError('Only BTCUSD/ETHUSD supported in V8')
     tf=str(d.get('timeframe') or '').lower()
     if tf not in {'1m','3m','5m','15m','30m','1h','2h','4h','6h','12h','1d'}: raise ValueError('Unsupported timeframe')
     side=str(d.get('side') or 'SIGNAL').upper()
@@ -42,6 +48,7 @@ def validate_strategy(d):
                 if not 1<=p<=500: raise ValueError('Indicator period out of range')
                 obj['period']=p
             if 'multiplier' in obj: obj['multiplier']=float(obj['multiplier'])
+            if 'stddev' in obj: obj['stddev']=float(obj['stddev'])
         if rt=='value': right['value']=float(right['value'])
         cleaned.append({'left':left,'op':op,'right':right})
     return {'name':name,'symbol':symbol,'timeframe':tf,'side':side,'rules':cleaned}
