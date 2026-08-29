@@ -1,83 +1,34 @@
-import time
-import asyncio
+import asyncio,time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-
-from config import settings, logger
-from storage import storage
-from fyers_service import fyers_service
-from scanner import scanner
+from config import settings,logger
+from mudrex_service import mudrex_service
+from signal_engine import engine
 from bot import telegram_bot
-from nifty_option_engine import nifty_option_scanner
-
-
-def run_startup_self_check():
-    print("\n" + "=" * 52)
-    print(" FYERS AI MARKET BOT - TELEGRAM ONLY")
-    print("=" * 52)
-    print(f" [TELEGRAM] Token: {'configured' if settings.TELEGRAM_BOT_TOKEN else 'NOT SET'}")
-    print(f" [TELEGRAM] Allowed users: {settings.allowed_user_ids() or 'NOT SET'}")
-    print(f" [AI] Gemini: {'configured' if settings.GEMINI_API_KEY else 'NOT SET'}")
-    print(f" [AI] Groq fallback: {'configured' if settings.GROQ_API_KEY else 'NOT SET'}")
-    if settings.MOCK_MARKET_DATA:
-        print(" [FYERS] EXPLICIT MOCK MODE")
-    else:
-        print(f" [FYERS] Live data: {'connected' if fyers_service.is_healthy() else 'OFFLINE / TOKEN REQUIRED'}")
-    print(" [SAFETY] Auto-trading: DISABLED")
-    print(f" [SESSION] Scanner auto-stop: {settings.MAX_SCANNER_SESSION_HOURS} hours")
-    print("=" * 52 + "\n")
-
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    run_startup_self_check()
-    scanner.set_alert_callback(telegram_bot._alert_to_allowed_users)
-    nifty_option_scanner.set_alert_callback(telegram_bot._alert_to_allowed_users)
-    scanner_task = asyncio.create_task(scanner.run_loop())
-    nifty_option_task = asyncio.create_task(nifty_option_scanner.run_loop())
-    telegram_task = asyncio.create_task(telegram_bot.poll_updates())
-    logger.info("[APP] Telegram-only FYERS AI Market Bot started")
+async def lifespan(app:FastAPI):
+    print('\n'+'='*52)
+    print(' MUDREX CRYPTO AI BOT - TELEGRAM ONLY')
+    print('='*52)
+    print(' [MUDREX] Public market data: NO API KEY REQUIRED')
+    print(f" [SYMBOLS] {settings.symbols()}")
+    print(f" [TELEGRAM] {'configured' if settings.TELEGRAM_BOT_TOKEN else 'NOT SET'}")
+    print(f" [GEMINI] {'configured' if settings.GEMINI_API_KEY else 'NOT SET'}")
+    print(' [SAFETY] Auto-trading: DISABLED')
+    print('='*52+'\n')
+    engine.set_alert_callback(telegram_bot.alert)
+    tasks=[asyncio.create_task(telegram_bot.poll()),asyncio.create_task(mudrex_service.websocket_loop()),asyncio.create_task(engine.loop())]
+    logger.info('[APP] Mudrex crypto signal bot started')
     yield
-    logger.info("[APP] Shutting down services...")
-    scanner._is_running = False
-    nifty_option_scanner._running = False
-    telegram_bot._is_running = False
-    scanner_task.cancel()
-    nifty_option_task.cancel()
-    telegram_task.cancel()
-    await telegram_bot.client.aclose()
+    telegram_bot.running=False
+    for t in tasks:t.cancel()
+    await telegram_bot.client.aclose(); await mudrex_service.client.aclose()
 
-
-app = FastAPI(
-    title="FYERS AI Market Bot",
-    description="Telegram-only personal market scanner. HTTP is used only for cloud health checks.",
-    lifespan=lifespan,
-)
-
-
-@app.get("/")
-def root_endpoint():
-    return {"service": "FYERS AI Market Bot", "status": "online", "ui": "telegram", "timestamp": time.time()}
-
-
-@app.head("/")
-def root_head():
-    return None
-
-
-@app.get("/health")
-def health_check():
-    return {
-        "status": "healthy",
-        "telegram_configured": bool(settings.TELEGRAM_BOT_TOKEN),
-        "scanner_loop": "running" if scanner._is_running else "idle",
-        "active_scanners": len(scanner.get_active_scanners()) + len(nifty_option_scanner.status()),
-        "nifty_option_scanners": nifty_option_scanner.status(),
-        "mock_mode": settings.MOCK_MARKET_DATA,
-        "fyers_healthy": fyers_service.is_healthy(),
-    }
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app:app", host=settings.HOST, port=settings.PORT, reload=False)
+app=FastAPI(title='Mudrex Crypto AI Bot',lifespan=lifespan)
+@app.get('/')
+def root(): return {'service':'Mudrex Crypto AI Bot','status':'online','mode':'signal-only','timestamp':time.time()}
+@app.head('/')
+def head(): return None
+@app.get('/health')
+def health(): return {'status':'healthy','scanner':engine.running,'ws':mudrex_service.ws_connected,'symbols':settings.symbols(),'auto_trading':False}
