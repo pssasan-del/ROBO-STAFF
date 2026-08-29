@@ -37,3 +37,9 @@ This build follows Mudrex public market-data v1.0.9 conventions:
 - WebSocket ticker payload arrays are parsed correctly (`data: [{s,p,mp}, ...]`).
 - REST failures now log HTTP status and Mudrex response body for fast Render debugging.
 - Still public/read-only and signal-only. No Mudrex API secret is required.
+
+## V3 natural-language routing fix
+- Recognizes `bit coin`, `bitcoin`, `BTC`, `BTC/USDT`, common ETH variants.
+- Price-only questions fetch only the live/latest price first; they no longer fail just because 5m history is unavailable.
+- 5m history is fetched only for analysis/RSI/trend/signal questions.
+- Adds `[MUDREX_TOOL] supplied ... LIVE PRICE` logs so Render clearly shows the data bridge.
