@@ -31,11 +31,11 @@ def run_startup_self_check():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     run_startup_self_check()
-    scanner.set_alert_callback(telegram_bot.broadcast_alert)
-    nifty_option_scanner.set_alert_callback(telegram_bot.broadcast_alert)
+    scanner.set_alert_callback(telegram_bot._alert_to_allowed_users)
+    nifty_option_scanner.set_alert_callback(telegram_bot._alert_to_allowed_users)
     scanner_task = asyncio.create_task(scanner.run_loop())
     nifty_option_task = asyncio.create_task(nifty_option_scanner.run_loop())
-    telegram_task = asyncio.create_task(telegram_bot.start_polling())
+    telegram_task = asyncio.create_task(telegram_bot.poll_updates())
     logger.info("[APP] Telegram-only FYERS AI Market Bot started")
     yield
     logger.info("[APP] Shutting down services...")

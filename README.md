@@ -253,3 +253,11 @@ Historical questions such as `2024 Oct 5 ITC price ethra?` use FYERS daily histo
 - MIXED 44 uses a dedicated 22 midcap + 22 smallcap pool and can be started/stopped independently.
 - Saved scanners are deterministic and continue without an AI call on every scan; AI is used to parse new natural-language strategies.
 - No order placement / auto trading is implemented.
+
+## V6 Gemini ↔ FYERS conversational architecture
+
+All ordinary Telegram conversation is answered by Gemini (Groq is fallback only). For market questions the application first enriches the request with read-only FYERS facts and then asks Gemini to answer. Supported enrichment includes live equity/index quotes, dated daily candles (with previous-trading-day disclosure), NIFTY/BankNifty/Sensex option-chain strike snapshots where FYERS returns the contract, and basic 5-minute indicator context for analysis questions.
+
+Saved stock scanners are intentionally independent from AI on every scan. The five START buttons are 200% CALL, 200% PUT, ORB CALL, ORB PUT, and MIXED 44 (22 Midcap + 22 Smallcap). NIFTY option signal engines have a separate menu. Custom natural-language strategies are parsed once by AI, validated, then scanned deterministically by Python/FYERS until stopped.
+
+No auto-trading/order placement is implemented.

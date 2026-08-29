@@ -81,8 +81,8 @@ class AIRouter:
         except Exception as e:
             logger.error(f"[AI] Groq fallback failed: {e}")
         if json_mode:
-            return json.dumps({"name":"Quick Strategy","timeframe":"5","universe":"NIFTY50","logic":"AND","conditions":[]})
-        return "AI response unavailable. Please check Gemini/Groq configuration."
+            raise RuntimeError("Both AI providers failed to return valid strategy JSON")
+        return "AI response unavailable right now. Please try again in a moment."
 
     async def generate_response_async(
         self,

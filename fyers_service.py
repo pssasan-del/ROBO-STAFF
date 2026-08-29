@@ -184,6 +184,53 @@ class FyersService:
         atm_pe = next((x for x in chain if x.get("option_type")=="PE" and float(x.get("strike_price",0))==atm), None)
         return {"spot":spot,"atm_strike":atm,"pcr":pcr,"bias":bias,"call_write_oi":call_write,"put_write_oi":put_write,"atm_ce":atm_ce,"atm_pe":atm_pe}
 
+    @staticmethod
+    def _expiry_label(item: dict) -> str:
+        for key in ("date", "expiry", "expiryDate", "expiry_date"):
+            if item.get(key):
+                return str(item.get(key))
+        return ""
+
+    def get_option_contract_snapshot(self, underlying: str, strike: int, option_type: str, expiry_hint: str = ""):
+        """Resolve a requested CE/PE from FYERS option-chain, optionally selecting an expiry month.
+
+        expiry_hint format: YYYY-MM. If FYERS exposes expiryData, the closest matching expiry is selected
+        and the chain is re-fetched with its timestamp. Otherwise the nearest/current chain is used.
+        """
+        underlying = SymbolUniverse.format_symbol(underlying)
+        payload = self.get_option_chain(underlying, strikecount=50, timestamp="", greeks=True)
+        data = payload.get("data") or {}
+        resolved_expiry = None
+
+        expiry_data = data.get("expiryData") or data.get("expiry_data") or []
+        if expiry_hint and expiry_data:
+            candidates = []
+            for item in expiry_data:
+                label = self._expiry_label(item)
+                if expiry_hint in label:
+                    candidates.append(item)
+            if candidates:
+                chosen = candidates[0]
+                ts = chosen.get("expiry") or chosen.get("timestamp") or chosen.get("expiryTimestamp") or chosen.get("expiry_ts")
+                resolved_expiry = self._expiry_label(chosen) or str(ts or "")
+                if ts:
+                    payload = self.get_option_chain(underlying, strikecount=50, timestamp=str(ts), greeks=True)
+                    data = payload.get("data") or {}
+        elif expiry_data:
+            resolved_expiry = self._expiry_label(expiry_data[0])
+
+        chain = data.get("optionsChain") or []
+        side = option_type.upper()
+        matches = [x for x in chain if str(x.get("option_type", "")).upper() == side and int(float(x.get("strike_price") or 0)) == int(strike)]
+        if not matches:
+            raise MarketDataUnavailable(
+                f"FYERS option chain did not return {underlying} {int(strike)} {side} for the requested/current expiry."
+            )
+        row = matches[0]
+        if not resolved_expiry:
+            resolved_expiry = str(row.get("expiry") or row.get("expiryDate") or "current/nearest chain")
+        return row, {"resolved_expiry": resolved_expiry, "underlying": underlying}
+
     def get_market_overview(self) -> MarketStatusOverview:
         if settings.MOCK_MARKET_DATA:
             return MockMarketService.get_market_overview()
