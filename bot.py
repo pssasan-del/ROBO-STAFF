@@ -11,7 +11,7 @@ class TelegramBot:
     def __init__(self): self.token=settings.TELEGRAM_BOT_TOKEN; self.client=httpx.AsyncClient(timeout=25); self.running=False; self.offset=0
     def auth(self,u): return not settings.allowed_user_ids() or u in settings.allowed_user_ids()
     def kb(self):
-        return {'keyboard':[[{'text':'₿ BTC Price'},{'text':'Ξ ETH Price'}],[{'text':'▶ Start Crypto Scanner'},{'text':'⛔ Stop Scanner'}],[{'text':'🔎 Scan Now'},{'text':'📊 Status'}]],'resize_keyboard':True,'is_persistent':True}
+        return {'keyboard':[[{'text':'₿ BTC Price'},{'text':'Ξ ETH Price'}],[{'text':'🧾 BTC Options'},{'text':'🧾 ETH Options'}],[{'text':'▶ Start Crypto Scanner'},{'text':'⛔ Stop Scanner'}],[{'text':'🔎 Scan Now'},{'text':'📊 Status'}]],'resize_keyboard':True,'is_persistent':True}
     async def send(self,chat,text,kb=None):
         if not self.token:return
         p={'chat_id':chat,'text':text,'parse_mode':'Markdown'}
@@ -29,6 +29,10 @@ class TelegramBot:
             q=await mudrex_service.latest_price('BTCUSDT'); return (f"₿ BTC/USDT: *{q['price']:,.2f}*\nSource: {q['source']}",self.kb())
         if t in ['ξ eth price','eth price']:
             q=await mudrex_service.latest_price('ETHUSDT'); return (f"Ξ ETH/USDT: *{q['price']:,.2f}*\nSource: {q['source']}",self.kb())
+        if t in ['🧾 btc options','btc options']:
+            return ('🧾 Ask like: *BTC 77500 CE and PE rate*\nNo API key needed; nearest expiry is used if you do not specify one.',self.kb())
+        if t in ['🧾 eth options','eth options']:
+            return ('🧾 Ask like: *ETH 2500 CE and PE rate*\nNo API key needed; nearest expiry is used if you do not specify one.',self.kb())
         if t in ['▶ start crypto scanner','start scanner']:
             engine.start(); return ('▶️ Crypto scanner started for '+', '.join(settings.symbols())+'.',self.kb())
         if t in ['⛔ stop scanner','stop scanner','stop']:
@@ -36,7 +40,7 @@ class TelegramBot:
         if t in ['🔎 scan now','scan now']:
             res=await engine.scan_once(); lines=['🔎 *SCAN RESULT*']+[f"• {s}: {m.get('status')}" for s,m in res.items()]; return ('\n'.join(lines),self.kb())
         if t in ['📊 status','status']:
-            return (f"📊 *STATUS*\nMudrex WS: {'🟢' if mudrex_service.ws_connected else '🟡 REST fallback'}\nScanner: {'🟢 RUNNING' if engine.running else '⚪ STOPPED'}\nSymbols: {', '.join(settings.symbols())}\nAuto-trading: DISABLED",self.kb())
+            return (f"📊 *STATUS*\nMudrex WS: {'🟢' if mudrex_service.ws_connected else '🟡 REST fallback'}\nScanner: {'🟢 RUNNING' if engine.running else '⚪ STOPPED'}\nSymbols: {', '.join(settings.symbols())}\nDelta BTC/ETH Options: 🟢 PUBLIC API\nAuto-trading: DISABLED",self.kb())
         return (await market_agent.answer(text),self.kb())
     async def handle(self,upd):
         m=upd.get('message') or {}; uid=(m.get('from') or {}).get('id'); chat=(m.get('chat') or {}).get('id'); text=(m.get('text') or '').strip()

@@ -43,3 +43,12 @@ This build follows Mudrex public market-data v1.0.9 conventions:
 - Price-only questions fetch only the live/latest price first; they no longer fail just because 5m history is unavailable.
 - 5m history is fetched only for analysis/RSI/trend/signal questions.
 - Adds `[MUDREX_TOOL] supplied ... LIVE PRICE` logs so Render clearly shows the data bridge.
+
+## V4 — Delta BTC/ETH Options connector
+- Mudrex remains the BTC/ETH live-price + candle + scanner source.
+- Delta Exchange India public `/v2/tickers` option-chain endpoint supplies BTC/ETH Call/Put premiums, bid/ask, OI and Greeks when returned.
+- No Delta API key/secret is required for this public market-data route.
+- Ask: `BTC 77500 CE and PE rate` or `ETH 2500 call put rate`.
+- If no expiry is supplied, the nearest non-expired Delta expiry is selected from the returned contracts.
+- If the requested strike is not listed, the bot explicitly reports the nearest listed strike rather than inventing a premium.
+- This project contains no order-placement methods.

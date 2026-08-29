@@ -21,6 +21,7 @@ class Settings:
     MUDREX_REST_BASE: str = os.getenv('MUDREX_REST_BASE','https://trade.mudrex.com/fapi/v1/price').rstrip('/')
     MUDREX_WS_URL: str = os.getenv('MUDREX_WS_URL','wss://trade.mudrex.com/fapi/v1/price/ws/linear')
     MUDREX_SYMBOLS: str = os.getenv('MUDREX_SYMBOLS','BTCUSDT,ETHUSDT')
+    DELTA_REST_BASE: str = os.getenv('DELTA_REST_BASE','https://api.india.delta.exchange').rstrip('/')
     SCAN_INTERVAL_SECONDS: int = int(os.getenv('SCAN_INTERVAL_SECONDS','30'))
     ALERT_COOLDOWN_MINUTES: int = int(os.getenv('ALERT_COOLDOWN_MINUTES','15'))
     MIN_RR: float = float(os.getenv('MIN_RR','1.85'))
