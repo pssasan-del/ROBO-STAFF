@@ -1,4 +1,4 @@
-import asyncio, json, math
+import asyncio, json, math, time
 import httpx
 from config import settings,logger
 from market_agent import market_agent
@@ -7,6 +7,8 @@ from strategy_store import strategy_store
 from strategy_engine import engine
 from strategy_parser import parse_strategy_text,parse_strategy_file,format_preview
 from photo_agent import photo_agent
+from delta_signal_engine import delta_auto_engine
+from performance_store import performance_store
 
 BASE='https://api.telegram.org/bot'
 
@@ -16,7 +18,7 @@ class TelegramBot:
         self.pending={}  # uid -> {'mode':'create|edit','sid':optional,'parsed':optional,'source':str}
     def auth(self,u):return not settings.allowed_user_ids() or u in settings.allowed_user_ids()
     def kb(self):
-        return {'keyboard':[[{'text':'₿ BTC Price'},{'text':'Ξ ETH Price'},{'text':'🥇 Gold Price'}],[{'text':'🧾 BTC Options'},{'text':'🧾 ETH Options'},{'text':'🧾 Gold Options'}],[{'text':'➕ Create Strategy'},{'text':'💾 Saved Strategies'}],[{'text':'🔎 Scan Active Now'},{'text':'📊 Status'}],[{'text':'⛔ Stop All Strategies'}]],'resize_keyboard':True,'is_persistent':True}
+        return {'keyboard':[[{'text':'🔥 Latest'},{'text':'📊 Daily'},{'text':'📅 Weekly'}],[{'text':'🌐 Data'},{'text':'💾 System'},{'text':'⚙️ Settings'}],[{'text':'🏠 Home'}]],'resize_keyboard':True,'is_persistent':True}
     @staticmethod
     def inline(rows):return {'inline_keyboard':rows}
     async def _post(self,method,payload):
@@ -34,6 +36,10 @@ class TelegramBot:
         if cqid:await self._post('answerCallbackQuery',{'callback_query_id':cqid,'text':text[:180]})
     async def alert(self,owner,text):
         if self.auth(owner):await self.send(owner,text,self.kb())
+    async def broadcast(self,text):
+        # Autonomous Delta alerts go only to explicitly allowed users.
+        for uid in settings.allowed_user_ids():
+            await self.send(uid,text,self.kb())
 
     async def strategy_page(self,uid,chat,page=0):
         items=strategy_store.list(uid); per=5; pages=max(1,math.ceil(len(items)/per)); page=max(0,min(page,pages-1)); subset=items[page*per:(page+1)*per]
@@ -124,8 +130,60 @@ class TelegramBot:
 
     async def process_text(self,uid,chat,text):
         t=text.lower().strip()
-        if t in ['/start','start','help']:
-            return await self.send(chat,'👋 *Delta Crypto AI Bot V9*\n\nDelta-only public market data + Gemini. BTC/ETH/Gold live data, options and custom saved strategy scanning. No order execution.',self.kb())
+        if t in ['/start','start','help','🏠 home','home']:
+            return await self.send(chat,"""👋 *ROBO STAFF — DELTA*
+
+Signal-only engine is active in the background. No order execution.""",self.kb())
+        if t in ['🔥 latest','latest','latest signal']:
+            c=delta_auto_engine.last_signal
+            return await self.send(chat,delta_auto_engine.format_signal(c) if c else '🔥 No qualified Delta signal has been generated since this engine started.',self.kb())
+        if t in ['📊 daily','daily','daily report']:
+            r=performance_store.report(1)
+            msg=f"""📊 *DAILY PERFORMANCE*
+Total: {r['total']} | Success: {r['success']} | Failed/SL: {r['failed']} | Unresolved: {r['unresolved']}
+Resolved success: *{r['success_rate']}%*
+BUY: {r['buy_success']}W/{r['buy_failed']}L | SELL: {r['sell_success']}W/{r['sell_failed']}L
+AI confirmed: {r['ai_confirmed']} | No AI confirmation: {r['no_ai_confirmation']}"""
+            return await self.send(chat,msg,self.kb())
+        if t in ['📅 weekly','weekly','weekly report']:
+            r=performance_store.report(7)
+            msg=f"""📅 *WEEKLY PERFORMANCE*
+Total: {r['total']} | Success: {r['success']} | Failed/SL: {r['failed']} | Unresolved: {r['unresolved']}
+Resolved success: *{r['success_rate']}%*
+BUY: {r['buy_success']}W/{r['buy_failed']}L | SELL: {r['sell_success']}W/{r['sell_failed']}L
+AI confirmed: {r['ai_confirmed']} | No AI confirmation: {r['no_ai_confirmation']}"""
+            return await self.send(chat,msg,self.kb())
+        if t in ['🌐 data','data','data status']:
+            age=(time.time()-delta_market_service.last_ws_message) if delta_market_service.last_ws_message else None
+            msg=f"""🌐 *DATA STATUS*
+Delta REST: 🟢 PUBLIC
+Delta WS: {'🟢 CONNECTED' if delta_market_service.ws_connected else '🟡 RECONNECTING / REST FALLBACK'}
+WS age: {f'{age:.0f}s' if age is not None else 'n/a'}
+Reconnects: {delta_market_service.reconnect_count}
+Symbols: {', '.join(settings.delta_symbols())}
+Last auto scan: {f'{time.time()-delta_auto_engine.last_scan_at:.0f}s ago' if delta_auto_engine.last_scan_at else 'not yet'}"""
+            return await self.send(chat,msg,self.kb())
+        if t in ['💾 system','system','system status']:
+            msg=f"""💾 *SYSTEM STATUS*
+Delta signal engine: {'🟢 RUNNING' if settings.DELTA_AUTO_SIGNAL_ENGINE and delta_auto_engine.running else '🔴 STOPPED'}
+AI confirmation: {'🟢 ENABLED' if settings.DELTA_AI_CONFIRMATION else '⚪ DISABLED'}
+Gemini configured: {'🟢' if settings.GEMINI_API_KEY else '🔴'}
+Groq configured: {'🟢' if settings.GROQ_API_KEY else '🔴'}
+Pending outcome checks: {len(delta_auto_engine.pending)}
+Scan errors: {delta_auto_engine.scan_errors}
+Candle cap/timeframe: {settings.DELTA_CANDLE_LIMIT}
+Trading: *DISABLED — SIGNAL ONLY*"""
+            return await self.send(chat,msg,self.kb())
+        if t in ['⚙️ settings','settings']:
+            msg=f"""⚙️ *DELTA SETTINGS*
+Always-on scan: {'ON' if settings.DELTA_AUTO_SIGNAL_ENGINE else 'OFF'}
+Scan interval: {settings.DELTA_SIGNAL_SCAN_SECONDS}s
+Minimum Python score: {settings.DELTA_MIN_SCORE}
+AI confirmation: {'ON (non-blocking)' if settings.DELTA_AI_CONFIRMATION else 'OFF'}
+Signal cooldown: {settings.DELTA_SIGNAL_COOLDOWN_MINUTES}m
+Memory: bounded candle fetch/cache; aggregate stats only are persisted.
+Execution: DISABLED."""
+            return await self.send(chat,msg,self.kb())
         if t in ['₿ btc price','btc price']:
             q=await delta_market_service.get_ticker('BTCUSD');return await self.send(chat,f"₿ BTC/USD: *${q['price']:,.2f}*\nSource: Delta public market data",self.kb())
         if t in ['ξ eth price','eth price']:

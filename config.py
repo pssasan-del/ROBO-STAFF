@@ -30,6 +30,15 @@ class Settings:
     RR_T2: float = float(os.getenv('RR_T2','2.30'))
     RR_T3: float = float(os.getenv('RR_T3','3.00'))
     HEARTBEAT_SECONDS: int = int(os.getenv('HEARTBEAT_SECONDS','60'))
+    DELTA_AUTO_SIGNAL_ENGINE: bool = os.getenv('DELTA_AUTO_SIGNAL_ENGINE','true').lower() in {'1','true','yes','on'}
+    DELTA_SIGNAL_SCAN_SECONDS: int = int(os.getenv('DELTA_SIGNAL_SCAN_SECONDS','60'))
+    DELTA_CANDLE_LIMIT: int = max(80, min(int(os.getenv('DELTA_CANDLE_LIMIT','180')), 300))
+    DELTA_MIN_SCORE: int = int(os.getenv('DELTA_MIN_SCORE','72'))
+    DELTA_STRONG_SCORE: int = int(os.getenv('DELTA_STRONG_SCORE','86'))
+    DELTA_AI_CONFIRMATION: bool = os.getenv('DELTA_AI_CONFIRMATION','true').lower() in {'1','true','yes','on'}
+    DELTA_AI_MIN_SCORE: int = int(os.getenv('DELTA_AI_MIN_SCORE','72'))
+    DELTA_SIGNAL_COOLDOWN_MINUTES: int = int(os.getenv('DELTA_SIGNAL_COOLDOWN_MINUTES','20'))
+    DELTA_STATS_PATH: str = os.getenv('DELTA_STATS_PATH','data/delta_signal_stats.json').strip()
 
     def allowed_user_ids(self):
         out=[]

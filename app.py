@@ -7,6 +7,7 @@ from delta_options_service import delta_options_service
 from strategy_store import strategy_store
 from strategy_engine import engine
 from bot import telegram_bot
+from delta_signal_engine import delta_auto_engine
 
 async def heartbeat_loop():
     """Lightweight internal health heartbeat. It does not bypass Render sleep; it confirms recovery once the service is awake."""
@@ -42,15 +43,17 @@ async def lifespan(app:FastAPI):
     print(' [SAFETY] Auto-trading: DISABLED')
     print('='*58+'\n')
     engine.set_alert_callback(telegram_bot.alert)
+    delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
     tasks=[
         asyncio.create_task(telegram_bot.poll(),name='telegram-poll'),
         asyncio.create_task(delta_market_service.websocket_loop(),name='delta-ws'),
         asyncio.create_task(engine.loop(),name='strategy-engine'),
+        asyncio.create_task(delta_auto_engine.loop(),name='delta-auto-signal-engine'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
     logger.info('[APP] Delta-only crypto AI bot V9 started; restored_active=%s',restored)
     yield
-    telegram_bot.running=False;engine.running=False;delta_market_service.running=False
+    telegram_bot.running=False;engine.running=False;delta_auto_engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
     await asyncio.gather(*tasks,return_exceptions=True)
     await telegram_bot.client.aclose();await delta_market_service.close();await delta_options_service.client.aclose()
