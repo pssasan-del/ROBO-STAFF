@@ -37,7 +37,7 @@ class Settings:
     DELTA_STRONG_SCORE: int = int(os.getenv('DELTA_STRONG_SCORE','86'))
     DELTA_AI_CONFIRMATION: bool = os.getenv('DELTA_AI_CONFIRMATION','true').lower() in {'1','true','yes','on'}
     DELTA_AI_MIN_SCORE: int = int(os.getenv('DELTA_AI_MIN_SCORE','72'))
-    DELTA_SIGNAL_COOLDOWN_MINUTES: int = int(os.getenv('DELTA_SIGNAL_COOLDOWN_MINUTES','20'))
+    DELTA_SIGNAL_COOLDOWN_MINUTES: int = int(os.getenv('DELTA_SIGNAL_COOLDOWN_MINUTES','5'))
     DELTA_STATS_PATH: str = os.getenv('DELTA_STATS_PATH','data/delta_signal_stats.json').strip()
 
     def allowed_user_ids(self):

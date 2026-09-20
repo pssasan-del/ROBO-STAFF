@@ -12,7 +12,7 @@ from strategy_engine import ema, rsi, atr, vwap, directional_values, williams_r,
 class Candidate:
     underlying:str; direction:str; action:str; option_symbol:str; strike:float; expiry:str
     premium:float; sl:float; t1:float; t2:float; t3:float; rr:float; score:int
-    ai_status:str; reason:str; created:float
+    ai_status:str; reason:str; setup_id:str; created:float
 
 class DeltaAutoSignalEngine:
     """Signal-only engine. It has no private Delta credentials and no order methods."""
@@ -61,7 +61,12 @@ class DeltaAutoSignalEngine:
         score+=5 if (direction=='BULLISH' and s5['price']>=daily_piv['pivot']) or (direction=='BEARISH' and s5['price']<=daily_piv['pivot']) else 0
         if chop:score-=18
         if over:score-=12
-        return {'symbol':symbol,'direction':direction,'trigger':trigger,'choppy':chop,'overextended':over,'score':max(0,min(100,score)),'structure':st,'daily_pivots':daily_piv,'five_pivots':five_piv,'tf':{k:v['state'] for k,v in tfs.items()}}
+        # Setup identity is tied to the active 5m setup candle. This suppresses only
+        # duplicate alerts from repeated scans of the same setup; a new 5m setup can alert.
+        last5=five[-1]
+        setup_stamp=str(last5.get('time') or last5.get('timestamp') or last5.get('start') or last5.get('close_time') or len(five))
+        setup_id=f"{symbol}:{direction}:{st}:{setup_stamp}"
+        return {'symbol':symbol,'direction':direction,'trigger':trigger,'choppy':chop,'overextended':over,'score':max(0,min(100,score)),'structure':st,'setup_id':setup_id,'daily_pivots':daily_piv,'five_pivots':five_piv,'tf':{k:v['state'] for k,v in tfs.items()}}
     @staticmethod
     def _underlying(symbol):return 'BTC' if symbol=='BTCUSD' else ('ETH' if symbol=='ETHUSD' else 'GOLD')
     async def _option_candidates(self,symbol,direction):
@@ -117,7 +122,7 @@ class DeltaAutoSignalEngine:
             ai=await self._ai_review(snap,opt) if snap['score']>=settings.DELTA_AI_MIN_SCORE else 'NO AI CONFIRMATION (not required)'
             # AI is non-blocking by locked requirement: valid Python signal still alerts on REJECT/WAIT/unavailable.
             reason=f"Python valid | {snap['direction']} | {snap['structure']} | 1m trigger | 5m ADX {snap['tf']['5m']['adx']:.1f} | RVOL {snap['tf']['5m']['rel_volume']:.2f}"
-            out.append(Candidate(self._underlying(symbol),snap['direction'],action,opt['symbol'],float(opt['strike']),opt['expiry'],p,sl,t1,t2,t3,settings.RR_T1,int(snap['score']),ai,reason,time.time()))
+            out.append(Candidate(self._underlying(symbol),snap['direction'],action,opt['symbol'],float(opt['strike']),opt['expiry'],p,sl,t1,t2,t3,settings.RR_T1,int(snap['score']),ai,reason,snap['setup_id'],time.time()))
         return out
     def format_signal(self,c):
         q='STRONG' if c.score>=settings.DELTA_STRONG_SCORE else 'VALID'
@@ -142,7 +147,10 @@ class DeltaAutoSignalEngine:
             try:
                 candidates=await self.analyze_symbol(symbol);results[symbol]={'status':'SIGNAL' if candidates else 'NO_TRADE','count':len(candidates)}
                 for c in candidates:
-                    key=f'{c.option_symbol}:{c.action}';now=time.time()
+                    # Duplicate suppression is strictly per symbol/instrument + action + direction + setup.
+                    # There is NO global cooldown: BTC, ETH and GOLD remain independent and simultaneous
+                    # valid signals are all allowed. A fresh 5m setup gets a new setup_id and may alert.
+                    key=f'{c.underlying}:{c.option_symbol}:{c.action}:{c.direction}:{c.setup_id}';now=time.time()
                     if now-self.last_alert.get(key,0)<settings.DELTA_SIGNAL_COOLDOWN_MINUTES*60:continue
                     self.last_alert[key]=now;self.last_signal=c
                     # Hard bound transient unresolved signals to protect RAM on long runtimes.
