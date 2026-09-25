@@ -6,6 +6,7 @@ from delta_market_service import delta_market_service
 from delta_options_service import delta_options_service
 from ai_router import ai_router
 from performance_store import performance_store
+from market_research import research_store
 from strategy_engine import ema, rsi, atr, vwap, directional_values, williams_r, fibonacci_pivots
 
 @dataclass
@@ -18,7 +19,7 @@ class DeltaAutoSignalEngine:
     """Signal-only engine. It has no private Delta credentials and no order methods."""
     def __init__(self):
         self.running=True; self.alert_cb=None; self.last_signal:Optional[Candidate]=None; self.last_scan_at=0.0
-        self.last_scan:Dict[str,dict]={};self.last_alert:Dict[str,float]={};self.pending:Dict[str,Candidate]={};self.loop_heartbeat=0.0
+        self.last_scan:Dict[str,dict]={};self.last_alert:Dict[str,float]={};self.pending:Dict[str,Candidate]={};self.post_sl:Dict[str,dict]={};self.loop_heartbeat=0.0
         self.ai_last_status='NOT CHECKED';self.scan_errors=0
     def set_alert_callback(self,cb):self.alert_cb=cb
     async def _alert(self,text):
@@ -139,8 +140,36 @@ class DeltaAutoSignalEngine:
                 if px is None:continue
                 success=(px>=c.t1) if c.action=='OPTION BUY' else (px<=c.t1);failed=(px<=c.sl) if c.action=='OPTION BUY' else (px>=c.sl)
                 if success or failed:
-                    performance_store.resolve(c.action,success);self.pending.pop(key,None);await self._alert(f"{'✅ T1 SUCCESS' if success else '🛑 SL / FAILED'} — `{c.option_symbol}` | {c.action} | Premium `{px:.6g}`")
+                    elapsed=time.time()-c.created
+                    performance_store.resolve(c.action,success,c.underlying,c.ai_status,elapsed);research_store.resolve(key,'T1' if success else 'SL',elapsed,px);self.pending.pop(key,None)
+                    if failed:
+                        # Keep a small, bounded post-SL watch so we can measure whether the original T1/T2 was reached later.
+                        if len(self.post_sl)>=50:
+                            oldest=min(self.post_sl,key=lambda k:self.post_sl[k]['failed_at']);self.post_sl.pop(oldest,None)
+                        self.post_sl[key]={'candidate':c,'failed_at':time.time(),'t1_seen':False,'t2_seen':False}
+                    await self._alert(f"{'✅ T1 SUCCESS' if success else '🛑 SL / FAILED'} — `{c.option_symbol}` | {c.action} | Premium `{px:.6g}`")
             except Exception as e:logger.debug('[DELTA_MONITOR] %s: %s',key,e)
+    async def _monitor_post_sl(self):
+        # Diagnostic only: continue watching failed contracts for up to 2 hours. No alerts/orders.
+        now=time.time()
+        for key,item in list(self.post_sl.items()):
+            c=item['candidate']
+            if now-item['failed_at']>7200:
+                self.post_sl.pop(key,None);continue
+            try:
+                und='GOLD' if c.underlying=='GOLD' else c.underlying
+                snap=await (delta_options_service.get_gold_strike_snapshot(c.strike,c.expiry) if und=='GOLD' else delta_options_service.get_strike_snapshot(und,c.strike,c.expiry))
+                side='ce' if c.option_symbol.startswith('C-') else 'pe';o=snap.get(side);px=float(o['premium']) if o and o.get('premium') is not None else None
+                if px is None:continue
+                t1=(px>=c.t1) if c.action=='OPTION BUY' else (px<=c.t1)
+                t2=(px>=c.t2) if c.action=='OPTION BUY' else (px<=c.t2)
+                if t1 and not item['t1_seen']:
+                    item['t1_seen']=True;performance_store.mark_sl_recovery('t1');research_store.mark_recovery(key)
+                if t2 and not item['t2_seen']:
+                    item['t2_seen']=True;performance_store.mark_sl_recovery('t2')
+                if item['t2_seen']:self.post_sl.pop(key,None)
+            except Exception as e:logger.debug('[DELTA_POST_SL] %s: %s',key,e)
+
     async def scan_once(self):
         self.last_scan_at=time.time();results={}
         for symbol in settings.delta_symbols():
@@ -156,10 +185,15 @@ class DeltaAutoSignalEngine:
                     # Hard bound transient unresolved signals to protect RAM on long runtimes.
                     if len(self.pending)>=50:
                         oldest=min(self.pending,key=lambda k:self.pending[k].created);self.pending.pop(oldest,None)
-                    self.pending[key]=c;performance_store.new_signal(c.action,c.ai_status.startswith('CONFIRM'));await self._alert(self.format_signal(c))
+                    features={}
+                    snap=self.last_scan.get({'BTC':'BTCUSD','ETH':'ETHUSD','GOLD':'XAUTUSD'}.get(c.underlying,''),{})
+                    tf5=(snap.get('tf') or {}).get('5m') or {}
+                    features={'structure':snap.get('structure'),'score':snap.get('score'),'direction':snap.get('direction'),'adx5':tf5.get('adx'),'rvol5':tf5.get('rel_volume'),'atr5':tf5.get('atr'),'rsi5':tf5.get('rsi'),'wr5':tf5.get('williams_r'),'daily_pivot':(snap.get('daily_pivots') or {}).get('pivot'),'five_pivot':(snap.get('five_pivots') or {}).get('pivot')}
+                    research_store.add(key,c,features)
+                    self.pending[key]=c;performance_store.new_signal(c.action,c.ai_status,c.underlying);await self._alert(self.format_signal(c))
             except Exception as e:
                 self.scan_errors+=1;results[symbol]={'status':'ERROR','error':str(e)[:160]};logger.warning('[DELTA_AUTO] %s failed: %s',symbol,e)
-        await self._monitor_pending();return results
+        await self._monitor_pending();await self._monitor_post_sl();return results
     async def loop(self):
         while True:
             self.loop_heartbeat=time.time()

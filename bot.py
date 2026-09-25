@@ -9,6 +9,8 @@ from strategy_parser import parse_strategy_text,parse_strategy_file,format_previ
 from photo_agent import photo_agent
 from delta_signal_engine import delta_auto_engine
 from performance_store import performance_store
+from entry_backtest import entry_backtester
+from market_research import research_store, market_replay
 
 BASE='https://api.telegram.org/bot'
 
@@ -21,6 +23,56 @@ class TelegramBot:
         return {'keyboard':[[{'text':'🔥 Latest'},{'text':'📊 Daily'},{'text':'📅 Weekly'}],[{'text':'🌐 Data'},{'text':'💾 System'},{'text':'⚙️ Settings'}],[{'text':'🏠 Home'}]],'resize_keyboard':True,'is_persistent':True}
     @staticmethod
     def inline(rows):return {'inline_keyboard':rows}
+    @staticmethod
+    def _perf_text(title,r):
+        def pair(group,name):
+            p=r.get(group,{}).get(name,{});w=int(p.get('success',0));l=int(p.get('failed',0));n=w+l;rate=round(100*w/n,1) if n else 0.0;return f"{w}W/{l}L ({rate}%)"
+        tm=r.get('timing',{})
+        return f"""{title}
+Total: {r['total']} | Success: {r['success']} | Failed/SL: {r['failed']} | Unresolved: {r['unresolved']}
+Resolved success: *{r['success_rate']}%*
+OPTION BUY: {pair('actions','OPTION BUY')} | OPTION SELL: {pair('actions','OPTION SELL')}
+BTC: {pair('assets','BTC')} | ETH: {pair('assets','ETH')} | GOLD: {pair('assets','GOLD')}
+AI CONFIRM: {pair('ai','confirm')} | REJECT: {pair('ai','reject')}
+AI WAIT: {pair('ai','wait')} | NO-AI: {pair('ai','no_ai')}
+SL timing: <5m {tm.get('sl_under_5m',0)} | 5-15m {tm.get('sl_5_15m',0)} | >15m {tm.get('sl_over_15m',0)}
+SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}"""
+
+    async def _run_entry_backtest(self,chat):
+        await self.send(chat,'🧪 Running read-only entry timing diagnostic on Delta 5m history. No orders, no strategy changes.')
+        lines=['🧪 *ENTRY TIMING BACKTEST*','Underlying 5m diagnostic — not an exact historical option-premium backtest.']
+        for symbol in settings.delta_symbols():
+            try:
+                r=await entry_backtester.run(symbol)
+                name='GOLD' if symbol=='XAUTUSD' else symbol.replace('USD','')
+                parts=[f"+{d} bar: {v['w']}W/{v['l']}L ({v['rate']}%)" for d,v in r.items()]
+                lines.append(f"\n*{name}*\n"+' | '.join(parts))
+            except Exception as e:
+                logger.warning('[ENTRY_BT] %s failed: %s',symbol,e);lines.append(f"\n{symbol}: unavailable")
+        lines.append('\nLive engine/AI/SL/RR are unchanged.')
+        return await self.send(chat,'\n'.join(lines),self.kb())
+    async def _run_market_replay(self,chat):
+        await self.send(chat,'⏪ Running read-only Delta 5m market replay. Historical option premium is not fabricated.')
+        lines=['⏪ *MARKET REPLAY*','Underlying breakout replay; live strategy is unchanged.']
+        for symbol in settings.delta_symbols():
+            try:
+                r=await market_replay.run(symbol)
+                name='GOLD' if symbol=='XAUTUSD' else symbol.replace('USD','')
+                lines.append(f"\n*{name}* — {r['w']}W/{r['l']}L ({r['rate']}%) | events {r['events']} | avg outcome {r['avg_bars']} bars | ADX {r['avg_adx']} | RVOL {r['avg_rvol']}")
+            except Exception as e:
+                logger.warning('[MARKET_REPLAY] %s failed: %s',symbol,e);lines.append(f"\n{symbol}: unavailable")
+        lines.append('\nThis is UNDERLYING REPLAY, not an exact historical option-premium backtest.')
+        return await self.send(chat,'\n'.join(lines),self.kb())
+
+    async def _research_report(self,chat):
+        r=research_store.summary();lines=['🔬 *RESEARCH MODULE*',f"Compact samples stored: {r['total']} | SL→later T1: {r['recovered']}"]
+        if not r['buckets']:lines.append('No resolved research samples yet. New live signals will populate this automatically.')
+        for (und,action),q in sorted(r['buckets'].items()):
+            n=q['w']+q['l'];rate=round(100*q['w']/n,1) if n else 0
+            lines.append(f"{und} {action}: {q['w']}W/{q['l']}L ({rate}%) | avg T1 {q['t1_sec']/60:.1f}m | avg SL {q['sl_sec']/60:.1f}m")
+        lines.append('Storage is bounded; no raw candle history/chat/prompts are persisted.')
+        return await self.send(chat,'\n'.join(lines),self.kb())
+
     async def _post(self,method,payload):
         r=await self.client.post(f'{BASE}{self.token}/{method}',json=payload)
         if r.status_code!=200:logger.warning('[TELEGRAM] %s HTTP %s %s',method,r.status_code,r.text[:300])
@@ -103,6 +155,12 @@ class TelegramBot:
         uid=(cq.get('from') or {}).get('id');msg=cq.get('message') or {};chat=(msg.get('chat') or {}).get('id');data=cq.get('data') or '';cqid=cq.get('id')
         if not uid or not chat or not self.auth(uid):return await self.answer_callback(cqid,'Access denied')
         try:
+            if data=='entrybt':
+                await self.answer_callback(cqid,'Running backtest');return await self._run_entry_backtest(chat)
+            if data=='marketreplay':
+                await self.answer_callback(cqid,'Running replay');return await self._run_market_replay(chat)
+            if data=='research':
+                await self.answer_callback(cqid,'Research report');return await self._research_report(chat)
             if data.startswith('page:'):
                 await self.answer_callback(cqid);return await self.strategy_page(uid,chat,int(data.split(':')[1]))
             if data.startswith('toggle:'):
@@ -139,20 +197,10 @@ Signal-only engine is active in the background. No order execution.""",self.kb()
             return await self.send(chat,delta_auto_engine.format_signal(c) if c else '🔥 No qualified Delta signal has been generated since this engine started.',self.kb())
         if t in ['📊 daily','daily','daily report']:
             r=performance_store.report(1)
-            msg=f"""📊 *DAILY PERFORMANCE*
-Total: {r['total']} | Success: {r['success']} | Failed/SL: {r['failed']} | Unresolved: {r['unresolved']}
-Resolved success: *{r['success_rate']}%*
-BUY: {r['buy_success']}W/{r['buy_failed']}L | SELL: {r['sell_success']}W/{r['sell_failed']}L
-AI confirmed: {r['ai_confirmed']} | No AI confirmation: {r['no_ai_confirmation']}"""
-            return await self.send(chat,msg,self.kb())
+            return await self.send(chat,self._perf_text('📊 *DAILY PERFORMANCE*',r),self.kb())
         if t in ['📅 weekly','weekly','weekly report']:
             r=performance_store.report(7)
-            msg=f"""📅 *WEEKLY PERFORMANCE*
-Total: {r['total']} | Success: {r['success']} | Failed/SL: {r['failed']} | Unresolved: {r['unresolved']}
-Resolved success: *{r['success_rate']}%*
-BUY: {r['buy_success']}W/{r['buy_failed']}L | SELL: {r['sell_success']}W/{r['sell_failed']}L
-AI confirmed: {r['ai_confirmed']} | No AI confirmation: {r['no_ai_confirmation']}"""
-            return await self.send(chat,msg,self.kb())
+            return await self.send(chat,self._perf_text('📅 *WEEKLY PERFORMANCE*',r),self.kb())
         if t in ['🌐 data','data','data status']:
             age=(time.time()-delta_market_service.last_ws_message) if delta_market_service.last_ws_message else None
             msg=f"""🌐 *DATA STATUS*
@@ -170,6 +218,7 @@ AI confirmation: {'🟢 ENABLED' if settings.DELTA_AI_CONFIRMATION else '⚪ DIS
 Gemini configured: {'🟢' if settings.GEMINI_API_KEY else '🔴'}
 Groq configured: {'🟢' if settings.GROQ_API_KEY else '🔴'}
 Pending outcome checks: {len(delta_auto_engine.pending)}
+Post-SL recovery watches: {len(delta_auto_engine.post_sl)}
 Scan errors: {delta_auto_engine.scan_errors}
 Candle cap/timeframe: {settings.DELTA_CANDLE_LIMIT}
 Trading: *DISABLED — SIGNAL ONLY*"""
@@ -183,7 +232,13 @@ AI confirmation: {'ON (non-blocking)' if settings.DELTA_AI_CONFIRMATION else 'OF
 Signal cooldown: {settings.DELTA_SIGNAL_COOLDOWN_MINUTES}m
 Memory: bounded candle fetch/cache; aggregate stats only are persisted.
 Execution: DISABLED."""
-            return await self.send(chat,msg,self.kb())
+            return await self.send(chat,msg,self.inline([[{'text':'🧪 Entry Backtest','callback_data':'entrybt'}],[{'text':'⏪ Market Replay','callback_data':'marketreplay'},{'text':'🔬 Research','callback_data':'research'}]]))
+        if t in ['🧪 backtest','backtest','entry backtest']:
+            return await self._run_entry_backtest(chat)
+        if t in ['⏪ market replay','market replay','replay']:
+            return await self._run_market_replay(chat)
+        if t in ['🔬 research','research','research report']:
+            return await self._research_report(chat)
         if t in ['₿ btc price','btc price']:
             q=await delta_market_service.get_ticker('BTCUSD');return await self.send(chat,f"₿ BTC/USD: *${q['price']:,.2f}*\nSource: Delta public market data",self.kb())
         if t in ['ξ eth price','eth price']:
