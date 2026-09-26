@@ -7,7 +7,7 @@ from delta_options_service import delta_options_service
 from ai_router import ai_router
 from performance_store import performance_store
 from market_research import research_store
-from polish_policy import POLISH_VERSION, evaluate_entry
+from polish_policy import POLISH_VERSION, evaluate_entry, evaluate_contract
 from strategy_engine import ema, rsi, atr, vwap, directional_values, williams_r, fibonacci_pivots
 
 @dataclass
@@ -41,6 +41,27 @@ class DeltaAutoSignalEngine:
         if bh>ah and bl>al:return 'HH/HL'
         if bh<ah and bl<al:return 'LH/LL'
         return 'RANGE'
+    @staticmethod
+    def _ema_cross_5m(rows):
+        """Find the newest EMA5/EMA9 cross in the current or previous 3 closed 5m bars."""
+        closes=[float(r['close']) for r in rows]
+        if len(closes)<15:return {'side':'NONE','bars_ago':None}
+        for bars_ago in range(0,4):
+            end=len(closes)-bars_ago
+            if end<10:break
+            now=closes[:end];prev=closes[:end-1]
+            e5=ema(now,5);e9=ema(now,9);p5=ema(prev,5);p9=ema(prev,9)
+            if p5<=p9 and e5>e9:return {'side':'BULLISH','bars_ago':bars_ago}
+            if p5>=p9 and e5<e9:return {'side':'BEARISH','bars_ago':bars_ago}
+        return {'side':'NONE','bars_ago':None}
+    @staticmethod
+    def _pivot_position(price,piv):
+        p=float(piv.get('pivot') or 0);s1=float(piv.get('s1') or 0);r1=float(piv.get('r1') or 0)
+        if not p:return 'UNKNOWN'
+        if r1 and price>r1:return 'ABOVE_R1'
+        if s1 and price<s1:return 'BELOW_S1'
+        if price>=p:return 'PIVOT_TO_R1'
+        return 'S1_TO_PIVOT'
     async def _snapshot(self,symbol):
         lim=settings.DELTA_CANDLE_LIMIT;tfs={}
         for tf in ('1m','5m','15m','1h','1d'):
@@ -52,16 +73,19 @@ class DeltaAutoSignalEngine:
         bull=sum(x['trend']=='BULLISH' for x in (sd,s1h,s15,s5));bear=sum(x['trend']=='BEARISH' for x in (sd,s1h,s15,s5))
         direction='BULLISH' if bull>=3 else ('BEARISH' if bear>=3 else 'MIXED')
         trigger=(direction=='BULLISH' and s1['trend']=='BULLISH') or (direction=='BEARISH' and s1['trend']=='BEARISH')
+        cross=self._ema_cross_5m(five);cross_aligned=cross['side']==direction and cross['bars_ago'] is not None
+        price_ema_aligned=(direction=='BULLISH' and s5['price']>s5['ema5']>s5['ema9']) or (direction=='BEARISH' and s5['price']<s5['ema5']<s5['ema9'])
         chop=s5['adx']<16 or (abs(s5['ema5']-s5['ema20'])/max(s5['price'],1)<0.00035 and s5['rel_volume']<0.9) or st=='RANGE'
         over=abs(s5['price']-s5['vwap'])>max(2.5*s5['atr'],s5['price']*.01)
         score=50
         score+=10 if direction!='MIXED' else -20;score+=8 if trigger else -10;score+=7 if s5['adx']>=20 else -5;score+=6 if s5['rel_volume']>=1.0 else -3
         score+=7 if (direction=='BULLISH' and st=='HH/HL') or (direction=='BEARISH' and st=='LH/LL') else 0
         score+=5 if (direction=='BULLISH' and s5['price']>=daily_piv['pivot']) or (direction=='BEARISH' and s5['price']<=daily_piv['pivot']) else 0
+        score+=5 if cross_aligned else -8;score+=4 if price_ema_aligned else -6
         if chop:score-=18
         if over:score-=12
         last5=five[-1];setup_stamp=str(last5.get('time') or last5.get('timestamp') or last5.get('start') or last5.get('close_time') or len(five));setup_id=f"{symbol}:{direction}:{st}:{setup_stamp}"
-        return {'symbol':symbol,'direction':direction,'trigger':trigger,'choppy':chop,'overextended':over,'score':max(0,min(100,score)),'structure':st,'setup_id':setup_id,'daily_pivots':daily_piv,'five_pivots':five_piv,'tf':{k:v['state'] for k,v in tfs.items()}}
+        return {'symbol':symbol,'direction':direction,'trigger':trigger,'choppy':chop,'overextended':over,'score':max(0,min(100,score)),'structure':st,'setup_id':setup_id,'daily_pivots':daily_piv,'five_pivots':five_piv,'daily_zone':self._pivot_position(s5['price'],daily_piv),'five_zone':self._pivot_position(s5['price'],five_piv),'ema_cross_5m':cross,'ema_cross_aligned':cross_aligned,'price_ema_aligned':price_ema_aligned,'tf':{k:v['state'] for k,v in tfs.items()}}
     @staticmethod
     def _underlying(symbol):return 'BTC' if symbol=='BTCUSD' else ('ETH' if symbol=='ETHUSD' else 'GOLD')
     async def _option_candidates(self,symbol,direction):
@@ -84,7 +108,7 @@ class DeltaAutoSignalEngine:
         return []
     async def _ai_review(self,snap,option):
         if not settings.DELTA_AI_CONFIRMATION:return 'NO AI CONFIRMATION (disabled)'
-        payload={'direction':snap['direction'],'score':snap['score'],'structure':snap['structure'],'daily_pivots':snap['daily_pivots'],'five_pivots':snap['five_pivots'],'timeframes':snap['tf'],'option':{k:option.get(k) for k in ('symbol','side','strike','premium','best_bid','best_ask','oi','volume','delta','bid_iv','ask_iv','spread_pct')}}
+        payload={'direction':snap['direction'],'score':snap['score'],'structure':snap['structure'],'daily_pivots':snap['daily_pivots'],'five_pivots':snap['five_pivots'],'ema_cross_5m':snap.get('ema_cross_5m'),'daily_zone':snap.get('daily_zone'),'five_zone':snap.get('five_zone'),'timeframes':snap['tf'],'option':{k:option.get(k) for k in ('symbol','side','strike','premium','best_bid','best_ask','oi','volume','delta','bid_iv','ask_iv','spread_pct')}}
         system='Return ONLY compact JSON: {"decision":"CONFIRM|REJECT|WAIT","confidence":0-100,"short_reason":"..."}. You are only a second-opinion reviewer. Never invent data.'
         try:
             raw=await ai_router.answer(json.dumps(payload,separators=(',',':')),system)
@@ -97,20 +121,25 @@ class DeltaAutoSignalEngine:
     async def analyze_symbol(self,symbol):
         snap=await self._snapshot(symbol);self.last_scan[symbol]=snap
         if snap['direction']=='MIXED' or not snap['trigger'] or snap['choppy'] or snap['overextended'] or snap['score']<settings.DELTA_MIN_SCORE:return []
+        if not snap.get('ema_cross_aligned') or not snap.get('price_ema_aligned'):return []
         out=[];underlying=self._underlying(symbol)
         for action,side,opt in await self._option_candidates(symbol,snap['direction']):
             if not opt:continue
             allowed,policy_reason=evaluate_entry(underlying,action,snap)
             if not allowed:
-                logger.info('[POLISH] %s %s filtered: %s',underlying,action,policy_reason);continue
+                logger.info('[FRESH_V2] %s %s filtered: %s',underlying,action,policy_reason);continue
+            tradeable,contract_reason=evaluate_contract(opt.get('premium'),bid=opt.get('best_bid'),ask=opt.get('best_ask'))
+            if not tradeable:
+                logger.info('[FRESH_V2_CONTRACT] %s %s %s filtered: %s',underlying,action,opt.get('symbol'),contract_reason);continue
             spread=opt.get('spread_pct')
             if spread is not None and spread>8:continue
             if (opt.get('volume') or 0)<=0 and (opt.get('oi') or 0)<=0:continue
-            p=float(opt['premium']);risk=max(p*.12,0.01)
-            if action=='OPTION BUY':sl=max(.000001,p-risk);t1=p+risk*settings.RR_T1;t2=p+risk*settings.RR_T2;t3=p+risk*settings.RR_T3
-            else:sl=p+risk;t1=max(.000001,p-risk*settings.RR_T1);t2=max(.000001,p-risk*settings.RR_T2);t3=max(.000001,p-risk*settings.RR_T3)
+            p=float(opt['premium']);risk=p*.12
+            if action=='OPTION BUY':sl=p-risk;t1=p+risk*settings.RR_T1;t2=p+risk*settings.RR_T2;t3=p+risk*settings.RR_T3
+            else:sl=p+risk;t1=p-risk*settings.RR_T1;t2=p-risk*settings.RR_T2;t3=p-risk*settings.RR_T3
+            if min(sl,t1,t2,t3)<=0:continue
             ai=await self._ai_review(snap,opt) if snap['score']>=settings.DELTA_AI_MIN_SCORE else 'NO AI CONFIRMATION (not required)'
-            reason=f"Python valid | {snap['direction']} | {snap['structure']} | 1m trigger | 5m ADX {snap['tf']['5m']['adx']:.1f} | RVOL {snap['tf']['5m']['rel_volume']:.2f} | {POLISH_VERSION}"
+            cross=snap['ema_cross_5m'];reason=f"Python valid | {snap['direction']} | {snap['structure']} | EMA5/9 cross {cross['bars_ago']}b | D:{snap['daily_zone']} | 5m:{snap['five_zone']} | ADX {snap['tf']['5m']['adx']:.1f} | RVOL {snap['tf']['5m']['rel_volume']:.2f} | {POLISH_VERSION}"
             out.append(Candidate(underlying,snap['direction'],action,opt['symbol'],float(opt['strike']),opt['expiry'],p,sl,t1,t2,t3,settings.RR_T1,int(snap['score']),ai,reason,snap['setup_id'],time.time()))
         return out
     def format_signal(self,c):
@@ -148,12 +177,12 @@ class DeltaAutoSignalEngine:
             try:
                 candidates=await self.analyze_symbol(symbol);results[symbol]={'status':'SIGNAL' if candidates else 'NO_TRADE','count':len(candidates)}
                 for c in candidates:
-                    key=f'{c.underlying}:{c.option_symbol}:{c.action}:{c.direction}:{c.setup_id}';now=time.time()
+                    key=f'{POLISH_VERSION}:{c.underlying}:{c.option_symbol}:{c.action}:{c.direction}:{c.setup_id}';now=time.time()
                     if now-self.last_alert.get(key,0)<settings.DELTA_SIGNAL_COOLDOWN_MINUTES*60:continue
                     self.last_alert[key]=now;self.last_signal=c
                     if len(self.pending)>=50:oldest=min(self.pending,key=lambda k:self.pending[k].created);self.pending.pop(oldest,None)
-                    snap=self.last_scan.get({'BTC':'BTCUSD','ETH':'ETHUSD','GOLD':'XAUTUSD'}.get(c.underlying,''),{});tf5=(snap.get('tf') or {}).get('5m') or {}
-                    features={'structure':snap.get('structure'),'score':snap.get('score'),'direction':snap.get('direction'),'adx5':tf5.get('adx'),'rvol5':tf5.get('rel_volume'),'atr5':tf5.get('atr'),'rsi5':tf5.get('rsi'),'wr5':tf5.get('williams_r'),'daily_pivot':(snap.get('daily_pivots') or {}).get('pivot'),'five_pivot':(snap.get('five_pivots') or {}).get('pivot'),'polish_version':POLISH_VERSION}
+                    snap=self.last_scan.get({'BTC':'BTCUSD','ETH':'ETHUSD','GOLD':'XAUTUSD'}.get(c.underlying,''),{});tf5=(snap.get('tf') or {}).get('5m') or {};dp=snap.get('daily_pivots') or {};fp=snap.get('five_pivots') or {}
+                    features={'research_epoch':POLISH_VERSION,'structure':snap.get('structure'),'score':snap.get('score'),'direction':snap.get('direction'),'ema_cross_5m':snap.get('ema_cross_5m'),'price_ema_aligned':snap.get('price_ema_aligned'),'ema5_5m':tf5.get('ema5'),'ema9_5m':tf5.get('ema9'),'ema20_5m':tf5.get('ema20'),'price_5m':tf5.get('price'),'adx5':tf5.get('adx'),'plus_di5':tf5.get('plus_di'),'minus_di5':tf5.get('minus_di'),'rvol5':tf5.get('rel_volume'),'atr5':tf5.get('atr'),'rsi5':tf5.get('rsi'),'wr5':tf5.get('williams_r'),'daily_pivot':dp.get('pivot'),'daily_s1':dp.get('s1'),'daily_r1':dp.get('r1'),'daily_zone':snap.get('daily_zone'),'five_pivot':fp.get('pivot'),'five_s1':fp.get('s1'),'five_r1':fp.get('r1'),'five_zone':snap.get('five_zone'),'polish_version':POLISH_VERSION}
                     research_store.add(key,c,features);self.pending[key]=c;performance_store.new_signal(c.action,c.ai_status,c.underlying);await self._alert(self.format_signal(c))
             except Exception as e:
                 self.scan_errors+=1;results[symbol]={'status':'ERROR','error':str(e)[:160]};logger.warning('[DELTA_AUTO] %s failed: %s',symbol,e)

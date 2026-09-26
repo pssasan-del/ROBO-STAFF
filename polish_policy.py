@@ -1,48 +1,65 @@
-"""ROBO STAFF POLISH V1 entry-quality policy.
+"""ROBO STAFF FRESH V2 research policy.
 
-This module is intentionally conservative. It does not alter RR, premium SL,
-AI behaviour, option selection, outcome monitoring, research persistence, or
-order execution (the engine remains signal-only).
-
-Policy basis: first research sample showed weak BTC BUY/SELL and ETH BUY,
-while ETH SELL and GOLD did not justify broad tightening. Re-check after the
-next research window before changing these thresholds again.
+Fresh epoch: do not tune from the old success/fail buckets.  The live engine
+remains signal-only.  V2 focuses on entry timing and executable contracts.
 """
 
-POLISH_VERSION = "POLISH_V1_2026-09-26"
+POLISH_VERSION = "FRESH_V2_2026-09-26"
 
 
 def evaluate_entry(underlying: str, action: str, snap: dict):
-    """Return (allowed, reason).
+    """Return (allowed, reason) for the underlying setup.
 
-    Existing core eligibility runs first. These are additive quality gates only.
-    GOLD is deliberately unchanged. ETH SELL is deliberately unchanged.
+    V2 deliberately removes the V1 BTC/ETH thresholds that were fitted to the
+    old result buckets.  Existing core eligibility still runs before this hook.
+    EMA/pivot observations are research variables until enough fresh samples
+    exist; they must not be converted into arbitrary hard thresholds here.
     """
-    und = str(underlying or "").upper()
-    action = str(action or "").upper()
-    score = int(snap.get("score") or 0)
-    tf5 = (snap.get("tf") or {}).get("5m") or {}
-    adx = float(tf5.get("adx") or 0.0)
-    rvol = float(tf5.get("rel_volume") or 0.0)
+    return True, "FRESH_V2_RESEARCH"
 
-    # BTC first sample was weak on both BUY and SELL. Require a cleaner trend
-    # and participation instead of widening the existing 12% premium stop.
-    if und == "BTC":
-        if score < 79:
-            return False, "BTC score<79"
-        if adx < 22:
-            return False, "BTC ADX<22"
-        if rvol < 0.35:
-            return False, "BTC RVOL<0.35"
 
-    # ETH BUY was the weakest observed bucket. Tighten only that family.
-    # ETH SELL is left on the original core rules until more samples arrive.
-    if und == "ETH" and action == "OPTION BUY":
-        if score < 82:
-            return False, "ETH BUY score<82"
-        if adx < 22:
-            return False, "ETH BUY ADX<22"
-        if rvol < 0.75:
-            return False, "ETH BUY RVOL<0.75"
+def evaluate_contract(premium, *, tick_size=None, bid=None, ask=None):
+    """Reject obviously non-executable/tiny option contracts.
 
-    return True, "PASS"
+    The previous 0.01 -> near-zero target case is not a valid 1:1.85 trade.
+    A premium must leave enough tick room for the existing 12% stop and
+    1.85R first target.  When a tick size is supplied, use it; otherwise apply
+    a conservative absolute floor so 0.01-style contracts cannot become
+    Telegram trade signals or contaminate fresh performance statistics.
+    """
+    try:
+        p = float(premium)
+    except (TypeError, ValueError):
+        return False, "invalid premium"
+    if p <= 0:
+        return False, "non-positive premium"
+
+    try:
+        tick = float(tick_size) if tick_size is not None else 0.0
+    except (TypeError, ValueError):
+        tick = 0.0
+
+    # Existing engine geometry: 12% premium SL and T1 at 1.85R.
+    sl_distance = p * 0.12
+    t1_distance = sl_distance * 1.85
+    min_tick = tick if tick > 0 else 0.01
+
+    # Require meaningful executable room, not a target collapsed to ~zero.
+    if p < 0.05:
+        return False, "premium<0.05 non-tradeable"
+    if sl_distance < min_tick or t1_distance < min_tick:
+        return False, "SL/T1 below executable tick room"
+
+    # If live bid/ask are available, reject pathological spreads.  Missing
+    # quotes are not fabricated; the caller can continue its existing logic.
+    try:
+        b = float(bid) if bid is not None else None
+        a = float(ask) if ask is not None else None
+        if b is not None and a is not None and b > 0 and a >= b:
+            mid = (a + b) / 2.0
+            if mid > 0 and (a - b) / mid > 0.20:
+                return False, "spread>20%"
+    except (TypeError, ValueError):
+        pass
+
+    return True, "TRADEABLE"

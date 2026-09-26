@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF Polish
+name: Validate ROBO STAFF Fresh V2
 
 on:
   pull_request:
@@ -15,25 +15,23 @@ jobs:
           python-version: '3.11'
       - name: Python syntax compile
         run: |
-          python -m py_compile delta_signal_engine.py polish_policy.py market_research.py bot.py config.py
-      - name: Validate conservative polish policy
+          python -m py_compile delta_signal_engine.py polish_policy.py market_research.py performance_store.py bot.py config.py
+      - name: Validate Fresh V2 policy
         run: |
           python - <<'PY'
-          from polish_policy import POLISH_VERSION, evaluate_entry
+          from polish_policy import POLISH_VERSION, evaluate_entry, evaluate_contract
 
-          def snap(score, adx, rvol):
-              return {'score': score, 'tf': {'5m': {'adx': adx, 'rel_volume': rvol}}}
+          assert POLISH_VERSION == 'FRESH_V2_2026-09-26'
+          # V2 does not tune entries from the old V1 W/L buckets.
+          assert evaluate_entry('BTC', 'OPTION BUY', {})[0] is True
+          assert evaluate_entry('ETH', 'OPTION SELL', {})[0] is True
+          assert evaluate_entry('GOLD', 'OPTION BUY', {})[0] is True
 
-          assert POLISH_VERSION == 'POLISH_V1_2026-09-26'
-          assert evaluate_entry('BTC', 'OPTION BUY', snap(78, 30, 1.0))[0] is False
-          assert evaluate_entry('BTC', 'OPTION SELL', snap(90, 21, 1.0))[0] is False
-          assert evaluate_entry('BTC', 'OPTION BUY', snap(90, 30, 0.34))[0] is False
-          assert evaluate_entry('BTC', 'OPTION SELL', snap(90, 30, 1.0))[0] is True
-          assert evaluate_entry('ETH', 'OPTION BUY', snap(81, 30, 1.0))[0] is False
-          assert evaluate_entry('ETH', 'OPTION BUY', snap(90, 30, 0.74))[0] is False
-          assert evaluate_entry('ETH', 'OPTION BUY', snap(90, 30, 1.0))[0] is True
-          assert evaluate_entry('ETH', 'OPTION SELL', snap(72, 16, 0.1))[0] is True
-          assert evaluate_entry('GOLD', 'OPTION BUY', snap(72, 16, 0.1))[0] is True
-          assert evaluate_entry('GOLD', 'OPTION SELL', snap(72, 16, 0.1))[0] is True
-          print('POLISH_POLICY_TESTS_OK')
+          # Root fix: 0.01-style contracts cannot become trade signals.
+          assert evaluate_contract(0.01)[0] is False
+          assert evaluate_contract(0.04)[0] is False
+          assert evaluate_contract(0.10)[0] is True
+          assert evaluate_contract(1.00, bid=0.50, ask=0.80)[0] is False
+          assert evaluate_contract(1.00, bid=0.98, ask=1.02)[0] is True
+          print('FRESH_V2_POLICY_TESTS_OK')
           PY
