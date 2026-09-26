@@ -1,0 +1,39 @@
+name: Validate ROBO STAFF Polish
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python syntax compile
+        run: |
+          python -m py_compile delta_signal_engine.py polish_policy.py market_research.py bot.py config.py
+      - name: Validate conservative polish policy
+        run: |
+          python - <<'PY'
+          from polish_policy import POLISH_VERSION, evaluate_entry
+
+          def snap(score, adx, rvol):
+              return {'score': score, 'tf': {'5m': {'adx': adx, 'rel_volume': rvol}}}
+
+          assert POLISH_VERSION == 'POLISH_V1_2026-09-26'
+          assert evaluate_entry('BTC', 'OPTION BUY', snap(78, 30, 1.0))[0] is False
+          assert evaluate_entry('BTC', 'OPTION SELL', snap(90, 21, 1.0))[0] is False
+          assert evaluate_entry('BTC', 'OPTION BUY', snap(90, 30, 0.34))[0] is False
+          assert evaluate_entry('BTC', 'OPTION SELL', snap(90, 30, 1.0))[0] is True
+          assert evaluate_entry('ETH', 'OPTION BUY', snap(81, 30, 1.0))[0] is False
+          assert evaluate_entry('ETH', 'OPTION BUY', snap(90, 30, 0.74))[0] is False
+          assert evaluate_entry('ETH', 'OPTION BUY', snap(90, 30, 1.0))[0] is True
+          assert evaluate_entry('ETH', 'OPTION SELL', snap(72, 16, 0.1))[0] is True
+          assert evaluate_entry('GOLD', 'OPTION BUY', snap(72, 16, 0.1))[0] is True
+          assert evaluate_entry('GOLD', 'OPTION SELL', snap(72, 16, 0.1))[0] is True
+          print('POLISH_POLICY_TESTS_OK')
+          PY
