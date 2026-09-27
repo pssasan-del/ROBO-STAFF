@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF Fresh V2
+name: Validate ROBO STAFF Fresh V3
 
 on:
   pull_request:
@@ -15,23 +15,24 @@ jobs:
           python-version: '3.11'
       - name: Python syntax compile
         run: |
-          python -m py_compile delta_signal_engine.py polish_policy.py market_research.py performance_store.py bot.py config.py
-      - name: Validate Fresh V2 policy
+          python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py market_research.py performance_store.py bot.py config.py
+      - name: Validate Fresh V3 policy
         run: |
           python - <<'PY'
           from polish_policy import POLISH_VERSION, evaluate_entry, evaluate_contract
-
-          assert POLISH_VERSION == 'FRESH_V2_2026-09-26'
-          # V2 does not tune entries from the old V1 W/L buckets.
-          assert evaluate_entry('BTC', 'OPTION BUY', {})[0] is True
-          assert evaluate_entry('ETH', 'OPTION SELL', {})[0] is True
-          assert evaluate_entry('GOLD', 'OPTION BUY', {})[0] is True
-
-          # Root fix: 0.01-style contracts cannot become trade signals.
-          assert evaluate_contract(0.01)[0] is False
-          assert evaluate_contract(0.04)[0] is False
-          assert evaluate_contract(0.10)[0] is True
-          assert evaluate_contract(1.00, bid=0.50, ask=0.80)[0] is False
-          assert evaluate_contract(1.00, bid=0.98, ask=1.02)[0] is True
-          print('FRESH_V2_POLICY_TESTS_OK')
+          assert POLISH_VERSION == 'FRESH_V3_2026-09-27'
+          assert evaluate_entry('BTC','OPTION BUY',{})[0] is True
+          assert evaluate_contract(0.01,bid=0.01,ask=0.02)[0] is False
+          assert evaluate_contract(0.09,bid=0.08,ask=0.09)[0] is False
+          assert evaluate_contract(1.00,bid=0.98,ask=1.02)[0] is True
+          assert evaluate_contract(1.00,bid=0.90,ask=1.10)[0] is False
+          print('FRESH_V3_POLICY_TESTS_OK')
           PY
+      - name: Validate executable quote direction and fresh stores
+        run: |
+          grep -q "entry = float(ask if action == 'OPTION BUY' else bid)" delta_signal_engine.py
+          grep -q "option_snapshot.get('best_bid') if c.action == 'OPTION BUY' else option_snapshot.get('best_ask')" delta_signal_engine.py
+          grep -q "delta_research_signals_v3" market_research.py
+          grep -q "delta_signal_stats_v3" performance_store.py
+          grep -q "update_excursion" market_research.py
+          echo FRESH_V3_EXECUTABLE_PRICING_OK

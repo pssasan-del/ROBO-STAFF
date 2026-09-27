@@ -4,12 +4,12 @@ from config import settings, logger
 
 IST=timezone(timedelta(hours=5,minutes=30))
 BASE_KEYS=('total','success','failed','unresolved','buy_success','buy_failed','sell_success','sell_failed','ai_confirmed','no_ai_confirmation','sl_later_t1','sl_later_t2')
-STATS_TABLE='delta_signal_stats_v2'
+STATS_TABLE='delta_signal_stats_v3'
 
 class PerformanceStore:
-    """Fresh V2 bounded aggregate-only statistics. Old V1 aggregates are intentionally excluded."""
+    """Fresh V3 bounded aggregate-only statistics. Older epochs are excluded."""
     def __init__(self,path=None):
-        self.path=(path or settings.DELTA_STATS_PATH)+'.v2';self.lock=threading.RLock();self.data={'days':{}}
+        self.path=(path or settings.DELTA_STATS_PATH)+'.v3';self.lock=threading.RLock();self.data={'days':{}}
         self.pg=False;self.conn=None;self._init_persistent();self._load();self._prune()
     def _init_persistent(self):
         try:
@@ -17,7 +17,7 @@ class PerformanceStore:
                 import psycopg
                 self.conn=psycopg.connect(settings.DATABASE_URL,autocommit=True);self.pg=True
                 with self.conn.cursor() as cur:cur.execute(f'''CREATE TABLE IF NOT EXISTS {STATS_TABLE}(day TEXT PRIMARY KEY,payload_json TEXT NOT NULL,updated_at TEXT NOT NULL)''')
-                logger.info('[DELTA_STATS] Fresh V2 PostgreSQL aggregate persistence enabled')
+                logger.info('[DELTA_STATS] Fresh V3 PostgreSQL aggregate persistence enabled')
         except Exception as e:
             logger.warning('[DELTA_STATS] PostgreSQL unavailable; file fallback: %s',e);self.conn=None;self.pg=False
     def _load(self):
@@ -66,7 +66,7 @@ class PerformanceStore:
             key,d=self._bucket();k='sl_later_t2' if str(target).lower()=='t2' else 'sl_later_t1';d[k]+=1;self._save_day(key)
     def report(self,days=1):
         with self.lock:
-            today=datetime.now(IST).date();keys=[(today-timedelta(days=i)).isoformat() for i in range(days)];out={k:0 for k in BASE_KEYS};out.update({'assets':{},'ai':{},'actions':{},'timing':{}})
+            today=datetime.now(IST).date();keys=[(today-timedelta(days=i)).isoformat() for i in range(days)];out={k:0 for k in BASE_KEYS};out.update({'assets':{},'ai':{},'actions':{},'timing':{},'epoch':'FRESH_V3_2026-09-27'})
             for day in keys:
                 src=self.data.get('days',{}).get(day,{})
                 for k in BASE_KEYS:out[k]+=int(src.get(k,0))
