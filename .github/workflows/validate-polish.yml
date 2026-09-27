@@ -58,9 +58,8 @@ jobs:
           bad = dict(base); bad['one_min_trigger']=False
           assert evaluate_entry('BTC','OPTION BUY',bad)[0] is False
 
-          # Dust / spread / expiry / delta quality gates.
           assert evaluate_contract(0.01,bid=0.01,ask=0.02,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is False
-          assert evaluate_contract(1.00,bid=.98,ask=1.02,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is False  # ~4% spread > BTC 2.5%
+          assert evaluate_contract(1.00,bid=.98,ask=1.02,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is False
           assert evaluate_contract(1.00,bid=.99,ask=1.01,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is True
           assert evaluate_contract(1.00,bid=.99,ask=1.01,underlying='ETH',action='OPTION BUY',spot=3000,delta=.05)[0] is False
           assert evaluate_contract(1.00,bid=.99,ask=1.01,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35,minutes_to_expiry=60,python_score=95)[0] is False
@@ -99,13 +98,13 @@ jobs:
               "STALE",
               "CORRELATION_THRESHOLD",
               "contract_rank_score",
-              "FRESH_V3.2_2026-09-27",
               "fib_r1",
               "fib_s1",
           ]
           for needle in required_engine:
               assert needle in engine, needle
 
+          assert "FRESH_V3.2_2026-09-27" in policy
           assert "delta_research_signals_v32" in research
           assert "delta_signal_stats_v32" in stats
           assert "promotion_ready" in research
@@ -113,7 +112,6 @@ jobs:
           assert "Research never auto-modifies live rules" in bot
           assert "SIGNAL ONLY — NO ORDER EXECUTED" in engine
 
-          # Safety: the autonomous Delta engine must not contain execution calls.
           forbidden = ['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', 'DELTA_API_SECRET', 'DELTA_API_KEY']
           for needle in forbidden:
               assert needle not in engine, f'forbidden execution/private credential token: {needle}'
