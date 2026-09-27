@@ -37,12 +37,7 @@ class DeltaOptionsService:
             strike = float(strike_s)
         except ValueError:
             return None
-        return {
-            "side": "CE" if side == "C" else "PE",
-            "underlying": underlying,
-            "strike": strike,
-            "expiry": expiry,
-        }
+        return {"side": "CE" if side == "C" else "PE", "underlying": underlying, "strike": strike, "expiry": expiry}
 
     @staticmethod
     def _normalize_expiry(expiry: Optional[str]) -> Optional[str]:
@@ -51,8 +46,7 @@ class DeltaOptionsService:
         raw = expiry.strip()
         for fmt in ("%d-%m-%Y", "%Y-%m-%d", "%d/%m/%Y", "%d %b %Y", "%d %B %Y"):
             try:
-                d = datetime.strptime(raw, fmt).date()
-                return d.strftime("%d-%m-%Y")
+                return datetime.strptime(raw, fmt).date().strftime("%d-%m-%Y")
             except ValueError:
                 pass
         return None
@@ -61,10 +55,7 @@ class DeltaOptionsService:
         underlying = underlying.upper()
         if underlying not in {"BTC", "ETH", "XAUT", "PAXG"}:
             raise ValueError("Delta India options connector supports BTC, ETH and Gold underlyings XAUT/PAXG")
-        params = {
-            "contract_types": "call_options,put_options",
-            "underlying_asset_symbols": underlying,
-        }
+        params = {"contract_types": "call_options,put_options", "underlying_asset_symbols": underlying}
         exp = self._normalize_expiry(expiry)
         if exp:
             params["expiry_date"] = exp
@@ -99,10 +90,15 @@ class DeltaOptionsService:
         mark = self._num(row.get("mark_price"))
         bid = self._num(quotes.get("best_bid"))
         ask = self._num(quotes.get("best_ask"))
-        # For "premium/rate", prefer actual last-trade close, then mark, then midpoint.
-        premium = close if close is not None else mark
-        if premium is None and bid is not None and ask is not None:
-            premium = (bid + ask) / 2
+
+        # FRESH V2.1: never let a stale last-trade close masquerade as the live
+        # option premium.  A valid two-sided book is freshest for signal study;
+        # mark is the next-best reference.  Close is last-resort display data.
+        midpoint = None
+        if bid is not None and ask is not None and bid > 0 and ask >= bid:
+            midpoint = (bid + ask) / 2.0
+        premium = midpoint if midpoint is not None else (mark if mark is not None and mark > 0 else close)
+
         return {
             "symbol": row.get("symbol"),
             "side": meta.get("side"),
@@ -110,11 +106,14 @@ class DeltaOptionsService:
             "strike": self._num(row.get("strike_price")) or meta.get("strike"),
             "expiry": meta.get("expiry").isoformat() if meta.get("expiry") else None,
             "premium": premium,
+            "reference_price": premium,
             "last_price": close,
             "mark_price": mark,
             "spot_price": self._num(row.get("spot_price")),
             "best_bid": bid,
             "best_ask": ask,
+            "buy_executable": ask if ask is not None and ask > 0 else None,
+            "sell_executable": bid if bid is not None and bid > 0 else None,
             "bid_iv": self._num(quotes.get("bid_iv")),
             "ask_iv": self._num(quotes.get("ask_iv")),
             "oi": self._num(row.get("oi")),
@@ -138,56 +137,31 @@ class DeltaOptionsService:
             parsed.append((row, meta))
         if not parsed:
             raise RuntimeError(f"No live {underlying.upper()} option contracts returned by Delta")
-
-        # If expiry wasn't requested, select the nearest expiry that contains option contracts.
         if not expiry:
             nearest_expiry = min(meta["expiry"] for _, meta in parsed)
             parsed = [(r, m) for r, m in parsed if m["expiry"] == nearest_expiry]
         else:
-            # Delta already filtered where supported, but protect against mixed responses.
             normalized = self._normalize_expiry(expiry)
             if normalized:
                 wanted = datetime.strptime(normalized, "%d-%m-%Y").date()
                 exact_exp = [(r, m) for r, m in parsed if m["expiry"] == wanted]
                 if exact_exp:
                     parsed = exact_exp
-
         strikes = sorted({m["strike"] for _, m in parsed})
         if not strikes:
             raise RuntimeError("Delta returned no strikes for selected expiry")
         exact = [x for x in strikes if abs(x - float(strike)) < 1e-9]
         selected_strike = exact[0] if exact else min(strikes, key=lambda x: abs(x - float(strike)))
         strike_exact = bool(exact)
-
         chosen = [(r, m) for r, m in parsed if abs(m["strike"] - selected_strike) < 1e-9]
         ce = next((self._snapshot(r) for r, m in chosen if m["side"] == "CE"), None)
         pe = next((self._snapshot(r) for r, m in chosen if m["side"] == "PE"), None)
         expiry_date = chosen[0][1]["expiry"].isoformat() if chosen else None
         spot = next((x.get("spot_price") for x in (ce, pe) if x and x.get("spot_price") is not None), None)
-
-        logger.info(
-            "[DELTA_OPTIONS] snapshot %s requested_strike=%s selected=%s exact=%s expiry=%s CE=%s PE=%s",
-            underlying.upper(), strike, selected_strike, strike_exact, expiry_date,
-            ce.get("premium") if ce else None, pe.get("premium") if pe else None,
-        )
-        return {
-            "underlying": underlying.upper(),
-            "requested_strike": float(strike),
-            "selected_strike": selected_strike,
-            "strike_exact": strike_exact,
-            "expiry": expiry_date,
-            "spot_price": spot,
-            "ce": ce,
-            "pe": pe,
-            "source": "Delta Exchange India public options ticker API",
-        }
+        logger.info("[DELTA_OPTIONS] snapshot %s requested_strike=%s selected=%s exact=%s expiry=%s CE=%s PE=%s", underlying.upper(), strike, selected_strike, strike_exact, expiry_date, ce.get("premium") if ce else None, pe.get("premium") if pe else None)
+        return {"underlying": underlying.upper(), "requested_strike": float(strike), "selected_strike": selected_strike, "strike_exact": strike_exact, "expiry": expiry_date, "spot_price": spot, "ce": ce, "pe": pe, "source": "Delta Exchange India public options ticker API"}
 
     async def get_gold_strike_snapshot(self, strike: float, expiry: Optional[str] = None):
-        """Resolve Gold options without hard-coding one RWA family forever.
-
-        Delta advertises Gold options on tokenized Gold products. We try XAUT first
-        (the bot's default Gold market symbol is XAUTUSD), then PAXG.
-        """
         errors=[]
         for underlying in ("XAUT", "PAXG"):
             try:
