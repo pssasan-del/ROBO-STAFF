@@ -1,31 +1,24 @@
 """ROBO STAFF FRESH V2 research policy.
 
-Fresh epoch: do not tune from the old success/fail buckets.  The live engine
-remains signal-only.  V2 focuses on entry timing and executable contracts.
+Fresh epoch: do not tune from the old success/fail buckets. Live engine remains
+signal-only. V2 focuses on entry timing and genuinely executable contracts.
 """
 
-POLISH_VERSION = "FRESH_V2_2026-09-26"
+POLISH_VERSION = "FRESH_V2.1_2026-09-27"
 
 
 def evaluate_entry(underlying: str, action: str, snap: dict):
-    """Return (allowed, reason) for the underlying setup.
-
-    V2 deliberately removes the V1 BTC/ETH thresholds that were fitted to the
-    old result buckets.  Existing core eligibility still runs before this hook.
-    EMA/pivot observations are research variables until enough fresh samples
-    exist; they must not be converted into arbitrary hard thresholds here.
-    """
+    """Underlying setup gate. Old V1 W/L buckets are deliberately not reused."""
     return True, "FRESH_V2_RESEARCH"
 
 
 def evaluate_contract(premium, *, tick_size=None, bid=None, ask=None):
-    """Reject obviously non-executable/tiny option contracts.
+    """Reject tiny, one-sided, wide-spread or noise-dominated option quotes.
 
-    The previous 0.01 -> near-zero target case is not a valid 1:1.85 trade.
-    A premium must leave enough tick room for the existing 12% stop and
-    1.85R first target.  When a tick size is supplied, use it; otherwise apply
-    a conservative absolute floor so 0.01-style contracts cannot become
-    Telegram trade signals or contaminate fresh performance statistics.
+    This is a signal/research quality gate, not an order function.  The 12% SL
+    must be meaningfully wider than the live bid/ask friction; otherwise a
+    signal can appear to hit SL immediately simply because the reference quote
+    was stale or the book was too wide.
     """
     try:
         p = float(premium)
@@ -35,31 +28,38 @@ def evaluate_contract(premium, *, tick_size=None, bid=None, ask=None):
         return False, "non-positive premium"
 
     try:
-        tick = float(tick_size) if tick_size is not None else 0.0
-    except (TypeError, ValueError):
-        tick = 0.0
-
-    # Existing engine geometry: 12% premium SL and T1 at 1.85R.
-    sl_distance = p * 0.12
-    t1_distance = sl_distance * 1.85
-    min_tick = tick if tick > 0 else 0.01
-
-    # Require meaningful executable room, not a target collapsed to ~zero.
-    if p < 0.05:
-        return False, "premium<0.05 non-tradeable"
-    if sl_distance < min_tick or t1_distance < min_tick:
-        return False, "SL/T1 below executable tick room"
-
-    # If live bid/ask are available, reject pathological spreads.  Missing
-    # quotes are not fabricated; the caller can continue its existing logic.
-    try:
         b = float(bid) if bid is not None else None
         a = float(ask) if ask is not None else None
-        if b is not None and a is not None and b > 0 and a >= b:
-            mid = (a + b) / 2.0
-            if mid > 0 and (a - b) / mid > 0.20:
-                return False, "spread>20%"
     except (TypeError, ValueError):
-        pass
+        return False, "invalid bid/ask"
 
-    return True, "TRADEABLE"
+    # Fresh research must be based on a real two-sided market.  Do not grade a
+    # contract from last-trade/mark alone.
+    if b is None or a is None or b <= 0 or a <= 0 or a < b:
+        return False, "no valid two-sided quote"
+
+    mid = (a + b) / 2.0
+    spread = a - b
+    spread_pct = spread / mid if mid > 0 else 1.0
+    if spread_pct > 0.08:
+        return False, "spread>8%"
+
+    try:
+        tick = float(tick_size) if tick_size is not None else 0.01
+    except (TypeError, ValueError):
+        tick = 0.01
+    if tick <= 0:
+        tick = 0.01
+
+    # Absolute dust protection remains, but the important test is whether the
+    # planned 12% stop has enough room beyond spread/tick microstructure noise.
+    if p < 0.05:
+        return False, "premium<0.05 non-tradeable"
+    sl_distance = p * 0.12
+    t1_distance = sl_distance * 1.85
+    if sl_distance < max(3.0 * tick, 1.5 * spread):
+        return False, "12% SL inside spread/tick noise"
+    if t1_distance < max(3.0 * tick, spread):
+        return False, "T1 inside spread/tick noise"
+
+    return True, "TRADEABLE_TWO_SIDED"
