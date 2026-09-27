@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF Fresh V3.1
+name: Validate ROBO STAFF Fresh V3.2
 
 on:
   pull_request:
@@ -13,47 +13,110 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Python syntax compile
         run: |
-          python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py market_research.py performance_store.py bot.py config.py
-      - name: Validate Fresh V3.1 strict entry policy
+          python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py market_research.py performance_store.py bot.py config.py strategy_engine.py
+
+      - name: Validate V3.2 deterministic policy and contract gates
         run: |
           python - <<'PY'
-          import time
-          from polish_policy import POLISH_VERSION, evaluate_entry, evaluate_contract
+          from polish_policy import (
+              POLISH_VERSION, MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE,
+              evaluate_entry, evaluate_contract, contract_gate, quality_score,
+              quality_label, ai_adjustment, ACCEPTANCE_CRITERIA,
+          )
 
-          assert POLISH_VERSION == 'FRESH_V3.1_2026-09-27'
+          assert POLISH_VERSION == 'FRESH_V3.2_2026-09-27'
+          assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (82, 90, 95)
+          assert ACCEPTANCE_CRITERIA['min_resolved'] == 50
+          assert ACCEPTANCE_CRITERIA['min_profit_factor'] == 1.35
+
           base = {
-              'direction':'BULLISH', 'score':85, 'structure':'HH/HL',
-              'price_ema_aligned':True, 'daily_zone':'PIVOT_TO_R1',
-              'five_zone':'PIVOT_TO_R1',
-              'setup_id':f"BTCUSD:BULLISH:HH/HL:{int(time.time())}",
-              'ema_cross_5m':{'side':'BULLISH','bars_ago':1},
+              'direction':'BULLISH', 'structure':'HH/HL', 'pattern':'BREAKOUT',
+              'price_ema_aligned':True, 'one_min_trigger':True,
+              'one_min_breakout':True, 'one_min_ema_hold':True,
+              'daily_zone':'PIVOT_TO_R1', 'five_zone':'PIVOT_TO_R1',
+              'choppy':False, 'overextended':False, 'pivot_extension_valid':False,
+              'distance_to_next_pivot_atr':1.4, 'breakout_extension_atr':0.35,
+              'vwap_distance_atr':0.6,
+              'ema_cross_5m':{'side':'BULLISH','bars_ago':0},
               'tf':{
-                  '5m':{'adx':28,'rel_volume':1.2,'plus_di':30,'minus_di':15},
-                  '15m':{'trend':'BULLISH'}, '1h':{'trend':'MIXED'}
-              }
+                  '1m':{'price':101,'ema5':100.5,'ema9':100,'ema20':99.5,'vwap':100,'adx':25,'plus_di':31,'minus_di':18,'rsi':60,'williams_r':-35,'rel_volume':1.3},
+                  '5m':{'price':101,'ema5':100.5,'ema9':100,'ema20':99,'vwap':100,'adx':29,'plus_di':32,'minus_di':18,'rsi':61,'williams_r':-32,'rel_volume':1.55},
+                  '15m':{'price':101,'ema5':100.5,'ema9':100,'ema20':99.5,'vwap':100,'adx':24,'plus_di':29,'minus_di':18,'trend':'BULLISH'},
+                  '1h':{'price':101,'ema5':100.7,'ema9':100.2,'ema20':99.5,'vwap':100,'adx':23,'plus_di':28,'minus_di':17,'trend':'BULLISH'},
+              },
           }
-          assert evaluate_entry('BTC','OPTION BUY',base)[0] is True
-          bad = dict(base); bad['ema_cross_5m']={'side':'BULLISH','bars_ago':0}
+          ok, reason = evaluate_entry('BTC','OPTION BUY',base)
+          assert ok, reason
+
+          bad = dict(base); bad['pattern']='NONE'
           assert evaluate_entry('BTC','OPTION BUY',bad)[0] is False
-          bad = dict(base); bad['five_zone']='S1_TO_PIVOT'
+          bad = dict(base); bad['distance_to_next_pivot_atr']=0.5
           assert evaluate_entry('BTC','OPTION BUY',bad)[0] is False
-          bad = dict(base); bad['tf']={**base['tf'],'5m':{**base['tf']['5m'],'rel_volume':0.4}}
+          bad = dict(base); bad['one_min_trigger']=False
           assert evaluate_entry('BTC','OPTION BUY',bad)[0] is False
 
-          assert evaluate_contract(0.01,bid=0.01,ask=0.02)[0] is False
-          assert evaluate_contract(0.30,bid=0.29,ask=0.30)[0] is False
-          assert evaluate_contract(1.00,bid=0.99,ask=1.01)[0] is True
-          assert evaluate_contract(1.00,bid=0.95,ask=1.05)[0] is False
-          print('FRESH_V31_POLICY_TESTS_OK')
+          # Dust / spread / expiry / delta quality gates.
+          assert evaluate_contract(0.01,bid=0.01,ask=0.02,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is False
+          assert evaluate_contract(1.00,bid=.98,ask=1.02,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is False  # ~4% spread > BTC 2.5%
+          assert evaluate_contract(1.00,bid=.99,ask=1.01,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is True
+          assert evaluate_contract(1.00,bid=.99,ask=1.01,underlying='ETH',action='OPTION BUY',spot=3000,delta=.05)[0] is False
+          assert evaluate_contract(1.00,bid=.99,ask=1.01,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35,minutes_to_expiry=60,python_score=95)[0] is False
+          assert evaluate_contract(1.00,bid=.99,ask=1.01,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35,minutes_to_expiry=180,python_score=85)[0] is False
+          assert contract_gate('GOLD','OPTION SELL',entry=1.00,bid=.98,ask=1.02,spot=4300,delta=-.25,minutes_to_expiry=400,python_score=90)[0] is True
+
+          score = quality_score('BTC',base,10.0)
+          assert 82 <= score <= 100, score
+          assert quality_label(82) == 'VALID'
+          assert quality_label(90) == 'STRONG'
+          assert quality_label(95) == 'ELITE'
+          assert ai_adjustment('CONFIRM',85) == 3
+          assert ai_adjustment('REJECT',95) == -7
+          assert ai_adjustment('WAIT',75) == -3
+          print('FRESH_V32_POLICY_TESTS_OK score=', score)
           PY
-      - name: Validate executable quote direction and clean V3.1 stores
+
+      - name: Validate implementation invariants
         run: |
-          grep -q "entry = float(ask if action == 'OPTION BUY' else bid)" delta_signal_engine.py
-          grep -q "option_snapshot.get('best_bid') if c.action == 'OPTION BUY' else option_snapshot.get('best_ask')" delta_signal_engine.py
-          grep -q "delta_research_signals_v31" market_research.py
-          grep -q "delta_signal_stats_v31" performance_store.py
-          grep -q "FRESH_V3.1_2026-09-27" polish_policy.py
-          grep -q "update_excursion" market_research.py
-          echo FRESH_V31_EXECUTABLE_PRICING_OK
+          python - <<'PY'
+          from pathlib import Path
+
+          engine = Path('delta_signal_engine.py').read_text()
+          policy = Path('polish_policy.py').read_text()
+          research = Path('market_research.py').read_text()
+          stats = Path('performance_store.py').read_text()
+          bot = Path('bot.py').read_text()
+
+          required_engine = [
+              "entry=float(ask if action == 'OPTION BUY' else bid)",
+              "option_snapshot.get('best_bid') if c.action == 'OPTION BUY' else option_snapshot.get('best_ask')",
+              "sl_breaches",
+              "loss_r>=1.35",
+              "WEAK/STALLED",
+              "INVALIDATED",
+              "STALE",
+              "CORRELATION_THRESHOLD",
+              "contract_rank_score",
+              "FRESH_V3.2_2026-09-27",
+              "fib_r1",
+              "fib_s1",
+          ]
+          for needle in required_engine:
+              assert needle in engine, needle
+
+          assert "delta_research_signals_v32" in research
+          assert "delta_signal_stats_v32" in stats
+          assert "promotion_ready" in research
+          assert "candidate_rules" in research
+          assert "Research never auto-modifies live rules" in bot
+          assert "SIGNAL ONLY — NO ORDER EXECUTED" in engine
+
+          # Safety: the autonomous Delta engine must not contain execution calls.
+          forbidden = ['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', 'DELTA_API_SECRET', 'DELTA_API_KEY']
+          for needle in forbidden:
+              assert needle not in engine, f'forbidden execution/private credential token: {needle}'
+
+          print('FRESH_V32_IMPLEMENTATION_INVARIANTS_OK')
+          PY
