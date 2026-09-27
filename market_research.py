@@ -5,29 +5,40 @@ from config import settings, logger
 from delta_market_service import delta_market_service
 from strategy_engine import ema, atr, vwap, directional_values
 
-RESEARCH_TABLE='delta_research_signals_v2'
+RESEARCH_EPOCH='FRESH_V3_2026-09-27'
+RESEARCH_TABLE='delta_research_signals_v3'
 
 class ResearchStore:
-    """Fresh V2 compact telemetry. Old research rows are excluded by using a new table."""
+    """Fresh V3 compact telemetry. Older research tables remain untouched and excluded."""
     def __init__(self):
-        self.lock=threading.RLock();self.rows=deque(maxlen=200);self.pg=False;self.conn=None
+        self.lock=threading.RLock();self.rows=deque(maxlen=250);self.pg=False;self.conn=None
         try:
             if settings.DATABASE_URL:
                 import psycopg
                 self.conn=psycopg.connect(settings.DATABASE_URL,autocommit=True);self.pg=True
                 with self.conn.cursor() as cur:
-                    cur.execute(f'''CREATE TABLE IF NOT EXISTS {RESEARCH_TABLE}(signal_key TEXT PRIMARY KEY,created_at DOUBLE PRECISION NOT NULL,underlying TEXT,action TEXT,direction TEXT,option_symbol TEXT,entry DOUBLE PRECISION,sl DOUBLE PRECISION,t1 DOUBLE PRECISION,score INTEGER,ai_status TEXT,features_json TEXT,outcome TEXT,outcome_seconds DOUBLE PRECISION,outcome_price DOUBLE PRECISION,sl_later_t1 BOOLEAN DEFAULT FALSE,updated_at TEXT NOT NULL)''')
-                logger.info('[RESEARCH] Fresh V2 PostgreSQL telemetry enabled')
+                    cur.execute(f'''CREATE TABLE IF NOT EXISTS {RESEARCH_TABLE}(
+                        signal_key TEXT PRIMARY KEY,created_at DOUBLE PRECISION NOT NULL,
+                        underlying TEXT,action TEXT,direction TEXT,option_symbol TEXT,
+                        entry DOUBLE PRECISION,sl DOUBLE PRECISION,t1 DOUBLE PRECISION,
+                        score INTEGER,ai_status TEXT,features_json TEXT,outcome TEXT,
+                        outcome_seconds DOUBLE PRECISION,outcome_price DOUBLE PRECISION,
+                        sl_later_t1 BOOLEAN DEFAULT FALSE,updated_at TEXT NOT NULL)''')
+                logger.info('[RESEARCH] Fresh V3 PostgreSQL telemetry enabled; old epochs excluded')
         except Exception as exc:
             logger.warning('[RESEARCH] PostgreSQL unavailable; bounded RAM fallback: %s',exc);self.pg=False;self.conn=None
+
     def add(self,key,candidate,features):
         row={'signal_key':key,'created_at':candidate.created,'underlying':candidate.underlying,'action':candidate.action,'direction':candidate.direction,'option_symbol':candidate.option_symbol,'entry':candidate.premium,'sl':candidate.sl,'t1':candidate.t1,'score':candidate.score,'ai_status':candidate.ai_status,'features':features,'outcome':'OPEN'}
         with self.lock:
             if self.pg:
                 with self.conn.cursor() as cur:
-                    cur.execute(f'''INSERT INTO {RESEARCH_TABLE}(signal_key,created_at,underlying,action,direction,option_symbol,entry,sl,t1,score,ai_status,features_json,outcome,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'OPEN',%s) ON CONFLICT(signal_key) DO NOTHING''',(key,candidate.created,candidate.underlying,candidate.action,candidate.direction,candidate.option_symbol,candidate.premium,candidate.sl,candidate.t1,candidate.score,candidate.ai_status,json.dumps(features,separators=(',',':')),datetime.now(timezone.utc).isoformat()))
-                    cur.execute(f'''DELETE FROM {RESEARCH_TABLE} WHERE signal_key IN (SELECT signal_key FROM {RESEARCH_TABLE} ORDER BY created_at DESC OFFSET 500)''')
+                    cur.execute(f'''INSERT INTO {RESEARCH_TABLE}(signal_key,created_at,underlying,action,direction,option_symbol,entry,sl,t1,score,ai_status,features_json,outcome,updated_at)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'OPEN',%s) ON CONFLICT(signal_key) DO NOTHING''',
+                        (key,candidate.created,candidate.underlying,candidate.action,candidate.direction,candidate.option_symbol,candidate.premium,candidate.sl,candidate.t1,candidate.score,candidate.ai_status,json.dumps(features,separators=(',',':')),datetime.now(timezone.utc).isoformat()))
+                    cur.execute(f'''DELETE FROM {RESEARCH_TABLE} WHERE signal_key IN (SELECT signal_key FROM {RESEARCH_TABLE} ORDER BY created_at DESC OFFSET 750)''')
             else:self.rows.append(row)
+
     def resolve(self,key,outcome,seconds,price):
         with self.lock:
             if self.pg:
@@ -35,6 +46,7 @@ class ResearchStore:
             else:
                 for r in reversed(self.rows):
                     if r['signal_key']==key:r.update(outcome=outcome,outcome_seconds=float(seconds),outcome_price=float(price));break
+
     def mark_recovery(self,key):
         with self.lock:
             if self.pg:
@@ -42,24 +54,50 @@ class ResearchStore:
             else:
                 for r in reversed(self.rows):
                     if r['signal_key']==key:r['sl_later_t1']=True;break
+
+    @staticmethod
+    def _acc_result(container,key,outcome):
+        q=container.setdefault(str(key),{'w':0,'l':0})
+        if outcome=='T1':q['w']+=1
+        elif outcome=='SL':q['l']+=1
+
     def summary(self):
         with self.lock:
+            records=[]
             if self.pg:
                 with self.conn.cursor() as cur:
-                    cur.execute(f"SELECT underlying,action,outcome,COUNT(*),AVG(outcome_seconds) FROM {RESEARCH_TABLE} WHERE outcome IN ('T1','SL') GROUP BY underlying,action,outcome");grouped=cur.fetchall()
-                    cur.execute(f"SELECT COUNT(*) FROM {RESEARCH_TABLE} WHERE outcome='SL' AND sl_later_t1=TRUE");recovered=int(cur.fetchone()[0]);cur.execute(f'SELECT COUNT(*) FROM {RESEARCH_TABLE}');total=int(cur.fetchone()[0])
+                    cur.execute(f"SELECT underlying,action,outcome,outcome_seconds,features_json,sl_later_t1 FROM {RESEARCH_TABLE} ORDER BY created_at DESC")
+                    for und,action,outcome,seconds,features_json,recovered in cur.fetchall():
+                        try:features=json.loads(features_json or '{}')
+                        except Exception:features={}
+                        records.append({'underlying':und,'action':action,'outcome':outcome,'seconds':float(seconds or 0),'features':features,'recovered':bool(recovered)})
             else:
-                grouped=[];recovered=sum(bool(r.get('sl_later_t1')) for r in self.rows);total=len(self.rows);acc={}
                 for r in self.rows:
-                    if r.get('outcome') not in {'T1','SL'}:continue
-                    k=(r['underlying'],r['action'],r['outcome']);q=acc.setdefault(k,[0,0.0]);q[0]+=1;q[1]+=float(r.get('outcome_seconds') or 0)
-                grouped=[(*k,v[0],v[1]/v[0] if v[0] else 0) for k,v in acc.items()]
-        buckets={}
-        for und,action,outcome,count,avgsec in grouped:
-            q=buckets.setdefault((und,action),{'w':0,'l':0,'t1_sec':0,'sl_sec':0})
-            if outcome=='T1':q['w']=int(count);q['t1_sec']=float(avgsec or 0)
-            else:q['l']=int(count);q['sl_sec']=float(avgsec or 0)
-        return {'total':total,'recovered':recovered,'buckets':buckets}
+                    records.append({'underlying':r.get('underlying'),'action':r.get('action'),'outcome':r.get('outcome'),'seconds':float(r.get('outcome_seconds') or 0),'features':r.get('features') or {},'recovered':bool(r.get('sl_later_t1'))})
+
+        buckets={};cross_bars={};daily_zones={};five_zones={};spreads={'T1':[],'SL':[]};open_count=0;recovered=0
+        for r in records:
+            out=r['outcome']
+            if out=='OPEN':open_count+=1
+            if r['recovered']:recovered+=1
+            if out not in {'T1','SL'}:continue
+            k=(r['underlying'],r['action']);q=buckets.setdefault(k,{'w':0,'l':0,'t1_sec':0.0,'sl_sec':0.0})
+            if out=='T1':q['w']+=1;q['t1_sec']+=r['seconds']
+            else:q['l']+=1;q['sl_sec']+=r['seconds']
+            f=r['features']
+            cross=(f.get('ema_cross_5m') or {}).get('bars_ago')
+            if cross is not None:self._acc_result(cross_bars,cross,out)
+            if f.get('daily_zone'):self._acc_result(daily_zones,f.get('daily_zone'),out)
+            if f.get('five_zone'):self._acc_result(five_zones,f.get('five_zone'),out)
+            try:
+                sp=float(f.get('option_spread_pct'))
+                if sp>=0:spreads[out].append(sp)
+            except (TypeError,ValueError):pass
+        for q in buckets.values():
+            if q['w']:q['t1_sec']/=q['w']
+            if q['l']:q['sl_sec']/=q['l']
+        avg_spread={k:(round(sum(v)/len(v),2) if v else 0.0) for k,v in spreads.items()}
+        return {'epoch':RESEARCH_EPOCH,'total':len(records),'open':open_count,'recovered':recovered,'buckets':buckets,'cross_bars':cross_bars,'daily_zones':daily_zones,'five_zones':five_zones,'avg_spread_pct':avg_spread}
 
 class MarketReplay:
     """Historical underlying replay. Exact historical option premium is never fabricated."""
