@@ -11,13 +11,14 @@ from delta_signal_engine import delta_auto_engine
 from performance_store import performance_store
 from entry_backtest import entry_backtester
 from market_research import research_store, market_replay
+from polish_policy import POLISH_VERSION, MIN_ALERT_SCORE, BASE_COOLDOWN_MINUTES
 
 BASE='https://api.telegram.org/bot'
 
 class TelegramBot:
     def __init__(self):
         self.token=settings.TELEGRAM_BOT_TOKEN; self.client=httpx.AsyncClient(timeout=30); self.running=False; self.offset=0
-        self.pending={}  # uid -> {'mode':'create|edit','sid':optional,'parsed':optional,'source':str}
+        self.pending={}
     def auth(self,u):return not settings.allowed_user_ids() or u in settings.allowed_user_ids()
     def kb(self):
         return {'keyboard':[[{'text':'🔥 Latest'},{'text':'📊 Daily'},{'text':'📅 Weekly'}],[{'text':'🌐 Data'},{'text':'💾 System'},{'text':'⚙️ Settings'}],[{'text':'🏠 Home'}]],'resize_keyboard':True,'is_persistent':True}
@@ -29,8 +30,10 @@ class TelegramBot:
             p=r.get(group,{}).get(name,{});w=int(p.get('success',0));l=int(p.get('failed',0));n=w+l;rate=round(100*w/n,1) if n else 0.0;return f"{w}W/{l}L ({rate}%)"
         tm=r.get('timing',{})
         return f"""{title}
+Epoch: `{r.get('epoch','')}`
 Total: {r['total']} | Success: {r['success']} | Failed/SL: {r['failed']} | Unresolved: {r['unresolved']}
-Resolved success: *{r['success_rate']}%*
+STALE: {r.get('stale',0)} | INVALIDATED: {r.get('invalidated',0)}
+Resolved T1 success: *{r['success_rate']}%*
 OPTION BUY: {pair('actions','OPTION BUY')} | OPTION SELL: {pair('actions','OPTION SELL')}
 BTC: {pair('assets','BTC')} | ETH: {pair('assets','ETH')} | GOLD: {pair('assets','GOLD')}
 AI CONFIRM: {pair('ai','confirm')} | REJECT: {pair('ai','reject')}
@@ -43,34 +46,39 @@ SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}""
         lines=['🧪 *ENTRY TIMING BACKTEST*','Underlying 5m diagnostic — not an exact historical option-premium backtest.']
         for symbol in settings.delta_symbols():
             try:
-                r=await entry_backtester.run(symbol)
-                name='GOLD' if symbol=='XAUTUSD' else symbol.replace('USD','')
-                parts=[f"+{d} bar: {v['w']}W/{v['l']}L ({v['rate']}%)" for d,v in r.items()]
-                lines.append(f"\n*{name}*\n"+' | '.join(parts))
-            except Exception as e:
-                logger.warning('[ENTRY_BT] %s failed: %s',symbol,e);lines.append(f"\n{symbol}: unavailable")
-        lines.append('\nLive engine/AI/SL/RR are unchanged.')
-        return await self.send(chat,'\n'.join(lines),self.kb())
+                r=await entry_backtester.run(symbol);name='GOLD' if symbol=='XAUTUSD' else symbol.replace('USD','')
+                parts=[f"+{d} bar: {v['w']}W/{v['l']}L ({v['rate']}%)" for d,v in r.items()];lines.append(f"\n*{name}*\n"+' | '.join(parts))
+            except Exception as e:logger.warning('[ENTRY_BT] %s failed: %s',symbol,e);lines.append(f"\n{symbol}: unavailable")
+        lines.append('\nLive engine/AI/SL/RR are unchanged.');return await self.send(chat,'\n'.join(lines),self.kb())
+
     async def _run_market_replay(self,chat):
-        await self.send(chat,'⏪ Running read-only Delta 5m market replay. Historical option premium is not fabricated.')
-        lines=['⏪ *MARKET REPLAY*','Underlying breakout replay; live strategy is unchanged.']
+        await self.send(chat,'⏪ Running read-only Delta 5m V3.2 market replay. Historical option premium is not fabricated.')
+        lines=['⏪ *MARKET REPLAY — V3.2*','Underlying breakout diagnostic; option fills are not fabricated.']
         for symbol in settings.delta_symbols():
             try:
-                r=await market_replay.run(symbol)
-                name='GOLD' if symbol=='XAUTUSD' else symbol.replace('USD','')
+                r=await market_replay.run(symbol);name='GOLD' if symbol=='XAUTUSD' else symbol.replace('USD','')
                 lines.append(f"\n*{name}* — {r['w']}W/{r['l']}L ({r['rate']}%) | events {r['events']} | avg outcome {r['avg_bars']} bars | ADX {r['avg_adx']} | RVOL {r['avg_rvol']}")
-            except Exception as e:
-                logger.warning('[MARKET_REPLAY] %s failed: %s',symbol,e);lines.append(f"\n{symbol}: unavailable")
-        lines.append('\nThis is UNDERLYING REPLAY, not an exact historical option-premium backtest.')
-        return await self.send(chat,'\n'.join(lines),self.kb())
+            except Exception as e:logger.warning('[MARKET_REPLAY] %s failed: %s',symbol,e);lines.append(f"\n{symbol}: unavailable")
+        lines.append('\nThis remains UNDERLYING REPLAY, not an exact historical option-premium backtest.');return await self.send(chat,'\n'.join(lines),self.kb())
 
     async def _research_report(self,chat):
-        r=research_store.summary();lines=['🔬 *RESEARCH MODULE*',f"Compact samples stored: {r['total']} | SL→later T1: {r['recovered']}"]
-        if not r['buckets']:lines.append('No resolved research samples yet. New live signals will populate this automatically.')
+        r=research_store.summary();a=r.get('acceptance',{});lines=['🔬 *RESEARCH MODULE — V3.2*',f"Epoch: `{r.get('epoch')}`",f"Alerts: {r['total']} | Open: {r['open']} | Correlation suppressed: {r.get('suppressed',0)} | SL→later T1: {r['recovered']}"]
+        if not r['buckets']:lines.append('No resolved V3.2 research samples yet. New signals populate this clean epoch automatically.')
         for (und,action),q in sorted(r['buckets'].items()):
             n=q['w']+q['l'];rate=round(100*q['w']/n,1) if n else 0
-            lines.append(f"{und} {action}: {q['w']}W/{q['l']}L ({rate}%) | avg T1 {q['t1_sec']/60:.1f}m | avg SL {q['sl_sec']/60:.1f}m")
-        lines.append('Storage is bounded; no raw candle history/chat/prompts are persisted.')
+            lines.append(f"{und} {action}: {q['w']}W/{q['l']}L ({rate}%) | PF {q.get('pf',0)} | avg T1 {q['t1_sec']/60:.1f}m | avg SL {q['sl_sec']/60:.1f}m")
+        lines.extend([
+            '', '📐 *PROMOTION GATE*',
+            f"Resolved: {a.get('resolved',0)} | Days: {a.get('calendar_days',0)} | T1 success: {a.get('t1_success_pct',0)}%",
+            f"PF: {a.get('profit_factor',0)} | Expectancy: {a.get('expectancy_r',0):+.2f}R",
+            f"Median T1: {a.get('median_t1_minutes',0)}m | P75 T1: {a.get('p75_t1_minutes',0)}m",
+            f"Fast SL <5m: {a.get('fast_sl_pct',0)}% | SL→later T1: {a.get('sl_later_t1_pct',0)}% | stale/invalidated: {a.get('stale_pct',0)}%",
+            f"Promotion ready: {'✅ YES' if a.get('promotion_ready') else '⏳ NO — keep collecting evidence'}",
+        ])
+        ideas=r.get('candidate_rules') or []
+        if ideas:
+            lines.append('\n🧪 *CANDIDATE A/B TESTS — research only*');lines.extend(f"• {x}" for x in ideas)
+        lines.append('\nResearch never auto-modifies live rules. Storage is bounded; raw candle/order-book/chat/prompt history is not persisted.')
         return await self.send(chat,'\n'.join(lines),self.kb())
 
     async def _post(self,method,payload):
@@ -82,22 +90,18 @@ SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}""
         p={'chat_id':chat,'text':text,'parse_mode':'Markdown'}
         if kb:p['reply_markup']=kb
         r=await self._post('sendMessage',p)
-        if r.status_code!=200:
-            p.pop('parse_mode',None);await self._post('sendMessage',p)
+        if r.status_code!=200:p.pop('parse_mode',None);await self._post('sendMessage',p)
     async def answer_callback(self,cqid,text=''):
         if cqid:await self._post('answerCallbackQuery',{'callback_query_id':cqid,'text':text[:180]})
     async def alert(self,owner,text):
         if self.auth(owner):await self.send(owner,text,self.kb())
     async def broadcast(self,text):
-        # Autonomous Delta alerts go only to explicitly allowed users.
-        for uid in settings.allowed_user_ids():
-            await self.send(uid,text,self.kb())
+        for uid in settings.allowed_user_ids():await self.send(uid,text,self.kb())
 
     async def strategy_page(self,uid,chat,page=0):
-        items=strategy_store.list(uid); per=5; pages=max(1,math.ceil(len(items)/per)); page=max(0,min(page,pages-1)); subset=items[page*per:(page+1)*per]
+        items=strategy_store.list(uid);per=5;pages=max(1,math.ceil(len(items)/per));page=max(0,min(page,pages-1));subset=items[page*per:(page+1)*per]
         if not subset:return await self.send(chat,'💾 No saved strategies yet. Tap *➕ Create Strategy* and type or upload your rules.',self.kb())
-        lines=[f'💾 *Saved Strategies* — {len(items)}/{settings.MAX_SAVED_STRATEGIES}',f'Page {page+1}/{pages} • Active {strategy_store.active_count(uid)}/{settings.MAX_ACTIVE_STRATEGIES}','']
-        buttons=[]
+        lines=[f'💾 *Saved Strategies* — {len(items)}/{settings.MAX_SAVED_STRATEGIES}',f'Page {page+1}/{pages} • Active {strategy_store.active_count(uid)}/{settings.MAX_ACTIVE_STRATEGIES}',''];buttons=[]
         for r in subset:
             state='🟢' if r['active'] else '⚪';lines.append(f"{state} `#{r['id']}` *{r['name']}* — {r['symbol']} {r['timeframe']}")
             buttons.append([{'text':('⛔ Stop' if r['active'] else '▶ Start')+f' #{r["id"]}','callback_data':f'toggle:{r["id"]}:{page}'},{'text':'✏️ Edit','callback_data':f'edit:{r["id"]}'},{'text':'🗑 Delete','callback_data':f'delask:{r["id"]}:{page}'}])
@@ -108,8 +112,7 @@ SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}""
         await self.send(chat,'\n'.join(lines),self.inline(buttons))
 
     async def preview(self,uid,chat,data,source,edit_sid=None):
-        self.pending[uid]={'mode':'edit' if edit_sid else 'create','sid':edit_sid,'parsed':data,'source':source}
-        label='💾 Save Changes' if edit_sid else '💾 Save Strategy'
+        self.pending[uid]={'mode':'edit' if edit_sid else 'create','sid':edit_sid,'parsed':data,'source':source};label='💾 Save Changes' if edit_sid else '💾 Save Strategy'
         await self.send(chat,format_preview(data),self.inline([[{'text':label,'callback_data':'savepending'},{'text':'❌ Cancel','callback_data':'cancelpending'}]]))
 
     async def parse_text_strategy(self,uid,chat,text,edit_sid=None):
@@ -123,18 +126,16 @@ SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}""
         rr=await self.client.get(f'https://api.telegram.org/file/bot{self.token}/{path}',timeout=30);rr.raise_for_status();return rr.content
 
     async def handle_upload(self,uid,chat,m):
-        doc=m.get('document'); photos=m.get('photo') or []; caption=(m.get('caption') or '').strip(); pend=self.pending.get(uid) or {}; edit_sid=pend.get('sid') if pend.get('mode')=='edit_wait' else None
+        doc=m.get('document');photos=m.get('photo') or [];caption=(m.get('caption') or '').strip();pend=self.pending.get(uid) or {};edit_sid=pend.get('sid') if pend.get('mode')=='edit_wait' else None
         if doc:
             if int(doc.get('file_size') or 0)>10*1024*1024:return await self.send(chat,'⚠️ Keep files under 10 MB.')
-            name=(doc.get('file_name') or '').lower(); mime=doc.get('mime_type') or 'application/octet-stream'
+            name=(doc.get('file_name') or '').lower();mime=doc.get('mime_type') or 'application/octet-stream'
             if not (mime.startswith('text/') or mime in {'application/pdf','application/json'} or name.endswith(('.txt','.md','.json','.pdf'))):return await self.send(chat,'Supported documents: TXT, MD, JSON or PDF. Trading screenshots should be sent as photos.')
-            data=await self.download_telegram_file(doc['file_id'])
-            await self.send(chat,'🧠 Reading the uploaded strategy document...')
+            data=await self.download_telegram_file(doc['file_id']);await self.send(chat,'🧠 Reading the uploaded strategy document...')
             try:parsed=await parse_strategy_file(data,mime,caption);return await self.preview(uid,chat,parsed,caption or '[uploaded strategy]',edit_sid)
             except Exception as e:logger.warning('[STRATEGY] document parse failed: %s',e);return await self.send(chat,'⚠️ I could not safely extract a supported strategy from that document.')
         if not photos:return
         p=photos[-1];data=await self.download_telegram_file(p['file_id']);mime='image/jpeg'
-        # If Create/Edit Strategy is explicitly active, preserve the deterministic strategy workflow.
         if pend.get('mode') in {'create_wait','edit_wait'}:
             await self.send(chat,'🧠 Reading the strategy screenshot and converting it to scan rules...')
             try:parsed=await parse_strategy_file(data,mime,caption);return await self.preview(uid,chat,parsed,caption or '[uploaded strategy]',edit_sid)
@@ -145,24 +146,18 @@ SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}""
             if result['kind']=='strategy':
                 text=(result['inspection'].get('strategy_text') or '').strip()
                 if not text:return await self.send(chat,'🧠 This looks like a strategy screenshot, but the rules are not clear enough to save. Tap *➕ Create Strategy* and send a clearer image.')
-                await self.send(chat,'🧠 Strategy screenshot detected. Building a rule preview — nothing will be saved until you confirm.')
-                return await self.parse_text_strategy(uid,chat,text)
+                await self.send(chat,'🧠 Strategy screenshot detected. Building a rule preview — nothing will be saved until you confirm.');return await self.parse_text_strategy(uid,chat,text)
             return await self.send(chat,result['answer'],self.kb())
-        except Exception as e:
-            logger.exception('[PHOTO] analysis failed: %s',e);return await self.send(chat,'⚠️ I could not safely analyse that screenshot. Try a clearer image or add a caption such as `hold cheyyano?`, `option chain analyse`, or `strategy save`.')
+        except Exception as e:logger.exception('[PHOTO] analysis failed: %s',e);return await self.send(chat,'⚠️ I could not safely analyse that screenshot. Try a clearer image or add a caption such as `hold cheyyano?`, `option chain analyse`, or `strategy save`.')
 
     async def handle_callback(self,cq):
         uid=(cq.get('from') or {}).get('id');msg=cq.get('message') or {};chat=(msg.get('chat') or {}).get('id');data=cq.get('data') or '';cqid=cq.get('id')
         if not uid or not chat or not self.auth(uid):return await self.answer_callback(cqid,'Access denied')
         try:
-            if data=='entrybt':
-                await self.answer_callback(cqid,'Running backtest');return await self._run_entry_backtest(chat)
-            if data=='marketreplay':
-                await self.answer_callback(cqid,'Running replay');return await self._run_market_replay(chat)
-            if data=='research':
-                await self.answer_callback(cqid,'Research report');return await self._research_report(chat)
-            if data.startswith('page:'):
-                await self.answer_callback(cqid);return await self.strategy_page(uid,chat,int(data.split(':')[1]))
+            if data=='entrybt':await self.answer_callback(cqid,'Running backtest');return await self._run_entry_backtest(chat)
+            if data=='marketreplay':await self.answer_callback(cqid,'Running replay');return await self._run_market_replay(chat)
+            if data=='research':await self.answer_callback(cqid,'Research report');return await self._research_report(chat)
+            if data.startswith('page:'):await self.answer_callback(cqid);return await self.strategy_page(uid,chat,int(data.split(':')[1]))
             if data.startswith('toggle:'):
                 _,sid,p=data.split(':');r=strategy_store.get(uid,int(sid))
                 if not r:return await self.answer_callback(cqid,'Strategy not found')
@@ -175,8 +170,7 @@ SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}""
                 _,sid,p=data.split(':');await self.answer_callback(cqid);return await self.send(chat,f'⚠️ Delete strategy `#{sid}`?',self.inline([[{'text':'✅ Yes, Delete','callback_data':f'del:{sid}:{p}'},{'text':'❌ Cancel','callback_data':f'page:{p}'}]]))
             if data.startswith('del:'):
                 _,sid,p=data.split(':');strategy_store.delete(uid,int(sid));await self.answer_callback(cqid,'Deleted');return await self.strategy_page(uid,chat,int(p))
-            if data=='cancelpending':
-                self.pending.pop(uid,None);await self.answer_callback(cqid,'Cancelled');return await self.send(chat,'Cancelled.',self.kb())
+            if data=='cancelpending':self.pending.pop(uid,None);await self.answer_callback(cqid,'Cancelled');return await self.send(chat,'Cancelled.',self.kb())
             if data=='savepending':
                 pend=self.pending.get(uid) or {};parsed=pend.get('parsed')
                 if not parsed:return await self.answer_callback(cqid,'Nothing to save')
@@ -189,56 +183,26 @@ SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}""
     async def process_text(self,uid,chat,text):
         t=text.lower().strip()
         if t in ['/start','start','help','🏠 home','home']:
-            return await self.send(chat,"""👋 *ROBO STAFF — DELTA*
-
-Signal-only engine is active in the background. No order execution.""",self.kb())
+            return await self.send(chat,"""👋 *ROBO STAFF — DELTA V3.2*\n\nSignal-only engine is active in the background. No order execution.""",self.kb())
         if t in ['🔥 latest','latest','latest signal']:
-            c=delta_auto_engine.last_signal
-            return await self.send(chat,delta_auto_engine.format_signal(c) if c else '🔥 No qualified Delta signal has been generated since this engine started.',self.kb())
+            c=delta_auto_engine.last_signal;return await self.send(chat,delta_auto_engine.format_signal(c) if c else '🔥 No qualified Delta signal has been generated since this engine started.',self.kb())
         if t in ['📊 daily','daily','daily report']:
-            r=performance_store.report(1)
-            return await self.send(chat,self._perf_text('📊 *DAILY PERFORMANCE*',r),self.kb())
+            return await self.send(chat,self._perf_text('📊 *DAILY PERFORMANCE*',performance_store.report(1)),self.kb())
         if t in ['📅 weekly','weekly','weekly report']:
-            r=performance_store.report(7)
-            return await self.send(chat,self._perf_text('📅 *WEEKLY PERFORMANCE*',r),self.kb())
+            return await self.send(chat,self._perf_text('📅 *WEEKLY PERFORMANCE*',performance_store.report(7)),self.kb())
         if t in ['🌐 data','data','data status']:
             age=(time.time()-delta_market_service.last_ws_message) if delta_market_service.last_ws_message else None
-            msg=f"""🌐 *DATA STATUS*
-Delta REST: 🟢 PUBLIC
-Delta WS: {'🟢 CONNECTED' if delta_market_service.ws_connected else '🟡 RECONNECTING / REST FALLBACK'}
-WS age: {f'{age:.0f}s' if age is not None else 'n/a'}
-Reconnects: {delta_market_service.reconnect_count}
-Symbols: {', '.join(settings.delta_symbols())}
-Last auto scan: {f'{time.time()-delta_auto_engine.last_scan_at:.0f}s ago' if delta_auto_engine.last_scan_at else 'not yet'}"""
+            msg=f"""🌐 *DATA STATUS*\nDelta REST: 🟢 PUBLIC\nDelta WS: {'🟢 CONNECTED' if delta_market_service.ws_connected else '🟡 RECONNECTING / REST FALLBACK'}\nWS age: {f'{age:.0f}s' if age is not None else 'n/a'}\nReconnects: {delta_market_service.reconnect_count}\nSymbols: {', '.join(settings.delta_symbols())}\nLast auto scan: {f'{time.time()-delta_auto_engine.last_scan_at:.0f}s ago' if delta_auto_engine.last_scan_at else 'not yet'}"""
             return await self.send(chat,msg,self.kb())
         if t in ['💾 system','system','system status']:
-            msg=f"""💾 *SYSTEM STATUS*
-Delta signal engine: {'🟢 RUNNING' if settings.DELTA_AUTO_SIGNAL_ENGINE and delta_auto_engine.running else '🔴 STOPPED'}
-AI confirmation: {'🟢 ENABLED' if settings.DELTA_AI_CONFIRMATION else '⚪ DISABLED'}
-Gemini configured: {'🟢' if settings.GEMINI_API_KEY else '🔴'}
-Groq configured: {'🟢' if settings.GROQ_API_KEY else '🔴'}
-Pending outcome checks: {len(delta_auto_engine.pending)}
-Post-SL recovery watches: {len(delta_auto_engine.post_sl)}
-Scan errors: {delta_auto_engine.scan_errors}
-Candle cap/timeframe: {settings.DELTA_CANDLE_LIMIT}
-Trading: *DISABLED — SIGNAL ONLY*"""
+            msg=f"""💾 *SYSTEM STATUS*\nVersion: `{POLISH_VERSION}`\nDelta signal engine: {'🟢 RUNNING' if settings.DELTA_AUTO_SIGNAL_ENGINE and delta_auto_engine.running else '🔴 STOPPED'}\nAI confirmation: {'🟢 ENABLED' if settings.DELTA_AI_CONFIRMATION else '⚪ DISABLED'}\nGemini configured: {'🟢' if settings.GEMINI_API_KEY else '🔴'}\nGroq configured: {'🟢' if settings.GROQ_API_KEY else '🔴'}\nPending outcome checks: {len(delta_auto_engine.pending)}\nPost-SL recovery watches: {len(delta_auto_engine.post_sl)}\nScan errors: {delta_auto_engine.scan_errors}\nCandle cap/timeframe: {settings.DELTA_CANDLE_LIMIT}\nTrading: *DISABLED — SIGNAL ONLY*"""
             return await self.send(chat,msg,self.kb())
         if t in ['⚙️ settings','settings']:
-            msg=f"""⚙️ *DELTA SETTINGS*
-Always-on scan: {'ON' if settings.DELTA_AUTO_SIGNAL_ENGINE else 'OFF'}
-Scan interval: {settings.DELTA_SIGNAL_SCAN_SECONDS}s
-Minimum Python score: {settings.DELTA_MIN_SCORE}
-AI confirmation: {'ON (non-blocking)' if settings.DELTA_AI_CONFIRMATION else 'OFF'}
-Signal cooldown: {settings.DELTA_SIGNAL_COOLDOWN_MINUTES}m
-Memory: bounded candle fetch/cache; aggregate stats only are persisted.
-Execution: DISABLED."""
+            msg=f"""⚙️ *DELTA SETTINGS — V3.2*\nAlways-on scan: {'ON' if settings.DELTA_AUTO_SIGNAL_ENGINE else 'OFF'}\nScan interval: {settings.DELTA_SIGNAL_SCAN_SECONDS}s\nHard minimum Python score: {MIN_ALERT_SCORE}\nAI confirmation: {'ON (non-blocking)' if settings.DELTA_AI_CONFIRMATION else 'OFF'}\nBase symbol/direction cooldown: {BASE_COOLDOWN_MINUTES}m\nMemory: bounded candle cache/research telemetry; no raw order-book persistence.\nExecution: DISABLED."""
             return await self.send(chat,msg,self.inline([[{'text':'🧪 Entry Backtest','callback_data':'entrybt'}],[{'text':'⏪ Market Replay','callback_data':'marketreplay'},{'text':'🔬 Research','callback_data':'research'}]]))
-        if t in ['🧪 backtest','backtest','entry backtest']:
-            return await self._run_entry_backtest(chat)
-        if t in ['⏪ market replay','market replay','replay']:
-            return await self._run_market_replay(chat)
-        if t in ['🔬 research','research','research report']:
-            return await self._research_report(chat)
+        if t in ['🧪 backtest','backtest','entry backtest']:return await self._run_entry_backtest(chat)
+        if t in ['⏪ market replay','market replay','replay']:return await self._run_market_replay(chat)
+        if t in ['🔬 research','research','research report']:return await self._research_report(chat)
         if t in ['₿ btc price','btc price']:
             q=await delta_market_service.get_ticker('BTCUSD');return await self.send(chat,f"₿ BTC/USD: *${q['price']:,.2f}*\nSource: Delta public market data",self.kb())
         if t in ['ξ eth price','eth price']:
@@ -258,10 +222,9 @@ Execution: DISABLED."""
         if t in ['🔎 scan active now','scan now']:
             res=await engine.scan_once(uid);return await self.send(chat,'🔎 Active scan complete. '+('No active strategies.' if not res else ' | '.join(f"#{k}: {v.get('status')}" for k,v in res.items())),self.kb())
         if t in ['📊 status','status']:
-            return await self.send(chat,f"📊 *STATUS*\nDelta REST: 🟢 PUBLIC\nDelta WS: {'🟢' if delta_market_service.ws_connected else '🟡 reconnecting / REST fallback'}\nSaved: {strategy_store.count(uid)}/{settings.MAX_SAVED_STRATEGIES}\nActive: {strategy_store.active_count(uid)}/{settings.MAX_ACTIVE_STRATEGIES}\nGemini: {'🟢' if settings.GEMINI_API_KEY else '🔴'}\nAssets: BTC / ETH / GOLD (XAUT)\nMin R:R: 1:1.85 • T1 1:1.85 • T2 1:2.30 • T3 1:3.00\nPhoto intelligence: 🟢 strategy / option chain / position / chart\nHeartbeat/reconnect: 🟢\nAuto-trading: DISABLED",self.kb())
+            return await self.send(chat,f"📊 *STATUS*\nDelta REST: 🟢 PUBLIC\nDelta WS: {'🟢' if delta_market_service.ws_connected else '🟡 reconnecting / REST fallback'}\nSaved: {strategy_store.count(uid)}/{settings.MAX_SAVED_STRATEGIES}\nActive: {strategy_store.active_count(uid)}/{settings.MAX_ACTIVE_STRATEGIES}\nGemini: {'🟢' if settings.GEMINI_API_KEY else '🔴'}\nAssets: BTC / ETH / GOLD (XAUT)\nMin R:R: 1:1.85 • adaptive V3.2 targets enabled\nPhoto intelligence: 🟢 strategy / option chain / position / chart\nHeartbeat/reconnect: 🟢\nAuto-trading: DISABLED",self.kb())
         pend=self.pending.get(uid) or {}
-        if pend.get('mode') in {'create_wait','edit_wait'}:
-            return await self.parse_text_strategy(uid,chat,text,pend.get('sid'))
+        if pend.get('mode') in {'create_wait','edit_wait'}:return await self.parse_text_strategy(uid,chat,text,pend.get('sid'))
         if t.startswith('strategy:') or t.startswith('strategy '):return await self.parse_text_strategy(uid,chat,text.split(':',1)[-1] if ':' in text else text)
         return await self.send(chat,await market_agent.answer(text),self.kb())
 
@@ -274,8 +237,7 @@ Execution: DISABLED."""
             if m.get('document') or m.get('photo'):return await asyncio.wait_for(self.handle_upload(uid,chat,m),35)
             text=(m.get('text') or '').strip()
             if not text:return
-            logger.info('[TELEGRAM] User %s sent: %s',uid,text)
-            await asyncio.wait_for(self.process_text(uid,chat,text),30)
+            logger.info('[TELEGRAM] User %s sent: %s',uid,text);await asyncio.wait_for(self.process_text(uid,chat,text),30)
         except asyncio.TimeoutError:await self.send(chat,'⚠️ Request timed out safely. Please try again.')
         except Exception as e:logger.exception('[TELEGRAM] request failed: %s',e);await self.send(chat,'⚠️ Request failed safely. Please try again.',self.kb())
 
