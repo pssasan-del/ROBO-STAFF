@@ -33,11 +33,13 @@ class Settings:
     DELTA_AUTO_SIGNAL_ENGINE: bool = os.getenv('DELTA_AUTO_SIGNAL_ENGINE','true').lower() in {'1','true','yes','on'}
     DELTA_SIGNAL_SCAN_SECONDS: int = int(os.getenv('DELTA_SIGNAL_SCAN_SECONDS','60'))
     DELTA_CANDLE_LIMIT: int = max(80, min(int(os.getenv('DELTA_CANDLE_LIMIT','180')), 300))
-    DELTA_MIN_SCORE: int = int(os.getenv('DELTA_MIN_SCORE','72'))
-    DELTA_STRONG_SCORE: int = int(os.getenv('DELTA_STRONG_SCORE','86'))
+    # Legacy env knobs remain readable for compatibility, but V3.2 hard-gates its own
+    # score/cooldown policy in polish_policy.py so stale Render values cannot weaken it.
+    DELTA_MIN_SCORE: int = int(os.getenv('DELTA_MIN_SCORE','82'))
+    DELTA_STRONG_SCORE: int = int(os.getenv('DELTA_STRONG_SCORE','90'))
     DELTA_AI_CONFIRMATION: bool = os.getenv('DELTA_AI_CONFIRMATION','true').lower() in {'1','true','yes','on'}
-    DELTA_AI_MIN_SCORE: int = int(os.getenv('DELTA_AI_MIN_SCORE','72'))
-    DELTA_SIGNAL_COOLDOWN_MINUTES: int = int(os.getenv('DELTA_SIGNAL_COOLDOWN_MINUTES','5'))
+    DELTA_AI_MIN_SCORE: int = int(os.getenv('DELTA_AI_MIN_SCORE','82'))
+    DELTA_SIGNAL_COOLDOWN_MINUTES: int = int(os.getenv('DELTA_SIGNAL_COOLDOWN_MINUTES','20'))
     DELTA_STATS_PATH: str = os.getenv('DELTA_STATS_PATH','data/delta_signal_stats.json').strip()
 
     def allowed_user_ids(self):
