@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF Fresh V3
+name: Validate ROBO STAFF Fresh V3.1
 
 on:
   pull_request:
@@ -16,23 +16,44 @@ jobs:
       - name: Python syntax compile
         run: |
           python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py market_research.py performance_store.py bot.py config.py
-      - name: Validate Fresh V3 policy
+      - name: Validate Fresh V3.1 strict entry policy
         run: |
           python - <<'PY'
+          import time
           from polish_policy import POLISH_VERSION, evaluate_entry, evaluate_contract
-          assert POLISH_VERSION == 'FRESH_V3_2026-09-27'
-          assert evaluate_entry('BTC','OPTION BUY',{})[0] is True
+
+          assert POLISH_VERSION == 'FRESH_V3.1_2026-09-27'
+          base = {
+              'direction':'BULLISH', 'score':85, 'structure':'HH/HL',
+              'price_ema_aligned':True, 'daily_zone':'PIVOT_TO_R1',
+              'five_zone':'PIVOT_TO_R1',
+              'setup_id':f"BTCUSD:BULLISH:HH/HL:{int(time.time())}",
+              'ema_cross_5m':{'side':'BULLISH','bars_ago':1},
+              'tf':{
+                  '5m':{'adx':28,'rel_volume':1.2,'plus_di':30,'minus_di':15},
+                  '15m':{'trend':'BULLISH'}, '1h':{'trend':'MIXED'}
+              }
+          }
+          assert evaluate_entry('BTC','OPTION BUY',base)[0] is True
+          bad = dict(base); bad['ema_cross_5m']={'side':'BULLISH','bars_ago':0}
+          assert evaluate_entry('BTC','OPTION BUY',bad)[0] is False
+          bad = dict(base); bad['five_zone']='S1_TO_PIVOT'
+          assert evaluate_entry('BTC','OPTION BUY',bad)[0] is False
+          bad = dict(base); bad['tf']={**base['tf'],'5m':{**base['tf']['5m'],'rel_volume':0.4}}
+          assert evaluate_entry('BTC','OPTION BUY',bad)[0] is False
+
           assert evaluate_contract(0.01,bid=0.01,ask=0.02)[0] is False
-          assert evaluate_contract(0.09,bid=0.08,ask=0.09)[0] is False
-          assert evaluate_contract(1.00,bid=0.98,ask=1.02)[0] is True
-          assert evaluate_contract(1.00,bid=0.90,ask=1.10)[0] is False
-          print('FRESH_V3_POLICY_TESTS_OK')
+          assert evaluate_contract(0.30,bid=0.29,ask=0.30)[0] is False
+          assert evaluate_contract(1.00,bid=0.99,ask=1.01)[0] is True
+          assert evaluate_contract(1.00,bid=0.95,ask=1.05)[0] is False
+          print('FRESH_V31_POLICY_TESTS_OK')
           PY
-      - name: Validate executable quote direction and fresh stores
+      - name: Validate executable quote direction and clean V3.1 stores
         run: |
           grep -q "entry = float(ask if action == 'OPTION BUY' else bid)" delta_signal_engine.py
           grep -q "option_snapshot.get('best_bid') if c.action == 'OPTION BUY' else option_snapshot.get('best_ask')" delta_signal_engine.py
-          grep -q "delta_research_signals_v3" market_research.py
-          grep -q "delta_signal_stats_v3" performance_store.py
+          grep -q "delta_research_signals_v31" market_research.py
+          grep -q "delta_signal_stats_v31" performance_store.py
+          grep -q "FRESH_V3.1_2026-09-27" polish_policy.py
           grep -q "update_excursion" market_research.py
-          echo FRESH_V3_EXECUTABLE_PRICING_OK
+          echo FRESH_V31_EXECUTABLE_PRICING_OK
