@@ -23,21 +23,35 @@ class ResearchStore:
                         entry DOUBLE PRECISION,sl DOUBLE PRECISION,t1 DOUBLE PRECISION,
                         score INTEGER,ai_status TEXT,features_json TEXT,outcome TEXT,
                         outcome_seconds DOUBLE PRECISION,outcome_price DOUBLE PRECISION,
-                        sl_later_t1 BOOLEAN DEFAULT FALSE,updated_at TEXT NOT NULL)''')
+                        sl_later_t1 BOOLEAN DEFAULT FALSE,mfe_pct DOUBLE PRECISION DEFAULT 0,
+                        mae_pct DOUBLE PRECISION DEFAULT 0,updated_at TEXT NOT NULL)''')
+                    cur.execute(f'ALTER TABLE {RESEARCH_TABLE} ADD COLUMN IF NOT EXISTS mfe_pct DOUBLE PRECISION DEFAULT 0')
+                    cur.execute(f'ALTER TABLE {RESEARCH_TABLE} ADD COLUMN IF NOT EXISTS mae_pct DOUBLE PRECISION DEFAULT 0')
                 logger.info('[RESEARCH] Fresh V3 PostgreSQL telemetry enabled; old epochs excluded')
         except Exception as exc:
             logger.warning('[RESEARCH] PostgreSQL unavailable; bounded RAM fallback: %s',exc);self.pg=False;self.conn=None
 
     def add(self,key,candidate,features):
-        row={'signal_key':key,'created_at':candidate.created,'underlying':candidate.underlying,'action':candidate.action,'direction':candidate.direction,'option_symbol':candidate.option_symbol,'entry':candidate.premium,'sl':candidate.sl,'t1':candidate.t1,'score':candidate.score,'ai_status':candidate.ai_status,'features':features,'outcome':'OPEN'}
+        row={'signal_key':key,'created_at':candidate.created,'underlying':candidate.underlying,'action':candidate.action,'direction':candidate.direction,'option_symbol':candidate.option_symbol,'entry':candidate.premium,'sl':candidate.sl,'t1':candidate.t1,'score':candidate.score,'ai_status':candidate.ai_status,'features':features,'outcome':'OPEN','mfe_pct':0.0,'mae_pct':0.0}
         with self.lock:
             if self.pg:
                 with self.conn.cursor() as cur:
-                    cur.execute(f'''INSERT INTO {RESEARCH_TABLE}(signal_key,created_at,underlying,action,direction,option_symbol,entry,sl,t1,score,ai_status,features_json,outcome,updated_at)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'OPEN',%s) ON CONFLICT(signal_key) DO NOTHING''',
+                    cur.execute(f'''INSERT INTO {RESEARCH_TABLE}(signal_key,created_at,underlying,action,direction,option_symbol,entry,sl,t1,score,ai_status,features_json,outcome,mfe_pct,mae_pct,updated_at)
+                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'OPEN',0,0,%s) ON CONFLICT(signal_key) DO NOTHING''',
                         (key,candidate.created,candidate.underlying,candidate.action,candidate.direction,candidate.option_symbol,candidate.premium,candidate.sl,candidate.t1,candidate.score,candidate.ai_status,json.dumps(features,separators=(',',':')),datetime.now(timezone.utc).isoformat()))
                     cur.execute(f'''DELETE FROM {RESEARCH_TABLE} WHERE signal_key IN (SELECT signal_key FROM {RESEARCH_TABLE} ORDER BY created_at DESC OFFSET 750)''')
             else:self.rows.append(row)
+
+    def update_excursion(self,key,mfe_pct,mae_pct):
+        mfe=max(0.0,float(mfe_pct or 0));mae=max(0.0,float(mae_pct or 0))
+        with self.lock:
+            if self.pg:
+                with self.conn.cursor() as cur:
+                    cur.execute(f'''UPDATE {RESEARCH_TABLE} SET mfe_pct=GREATEST(COALESCE(mfe_pct,0),%s),mae_pct=GREATEST(COALESCE(mae_pct,0),%s),updated_at=%s WHERE signal_key=%s''',(mfe,mae,datetime.now(timezone.utc).isoformat(),key))
+            else:
+                for r in reversed(self.rows):
+                    if r['signal_key']==key:
+                        r['mfe_pct']=max(float(r.get('mfe_pct') or 0),mfe);r['mae_pct']=max(float(r.get('mae_pct') or 0),mae);break
 
     def resolve(self,key,outcome,seconds,price):
         with self.lock:
@@ -66,16 +80,16 @@ class ResearchStore:
             records=[]
             if self.pg:
                 with self.conn.cursor() as cur:
-                    cur.execute(f"SELECT underlying,action,outcome,outcome_seconds,features_json,sl_later_t1 FROM {RESEARCH_TABLE} ORDER BY created_at DESC")
-                    for und,action,outcome,seconds,features_json,recovered in cur.fetchall():
+                    cur.execute(f"SELECT underlying,action,outcome,outcome_seconds,features_json,sl_later_t1,mfe_pct,mae_pct FROM {RESEARCH_TABLE} ORDER BY created_at DESC")
+                    for und,action,outcome,seconds,features_json,recovered,mfe,mae in cur.fetchall():
                         try:features=json.loads(features_json or '{}')
                         except Exception:features={}
-                        records.append({'underlying':und,'action':action,'outcome':outcome,'seconds':float(seconds or 0),'features':features,'recovered':bool(recovered)})
+                        records.append({'underlying':und,'action':action,'outcome':outcome,'seconds':float(seconds or 0),'features':features,'recovered':bool(recovered),'mfe_pct':float(mfe or 0),'mae_pct':float(mae or 0)})
             else:
                 for r in self.rows:
-                    records.append({'underlying':r.get('underlying'),'action':r.get('action'),'outcome':r.get('outcome'),'seconds':float(r.get('outcome_seconds') or 0),'features':r.get('features') or {},'recovered':bool(r.get('sl_later_t1'))})
+                    records.append({'underlying':r.get('underlying'),'action':r.get('action'),'outcome':r.get('outcome'),'seconds':float(r.get('outcome_seconds') or 0),'features':r.get('features') or {},'recovered':bool(r.get('sl_later_t1')),'mfe_pct':float(r.get('mfe_pct') or 0),'mae_pct':float(r.get('mae_pct') or 0)})
 
-        buckets={};cross_bars={};daily_zones={};five_zones={};spreads={'T1':[],'SL':[]};open_count=0;recovered=0
+        buckets={};cross_bars={};daily_zones={};five_zones={};spreads={'T1':[],'SL':[]};mfe={'T1':[],'SL':[]};mae={'T1':[],'SL':[]};open_count=0;recovered=0
         for r in records:
             out=r['outcome']
             if out=='OPEN':open_count+=1
@@ -84,8 +98,7 @@ class ResearchStore:
             k=(r['underlying'],r['action']);q=buckets.setdefault(k,{'w':0,'l':0,'t1_sec':0.0,'sl_sec':0.0})
             if out=='T1':q['w']+=1;q['t1_sec']+=r['seconds']
             else:q['l']+=1;q['sl_sec']+=r['seconds']
-            f=r['features']
-            cross=(f.get('ema_cross_5m') or {}).get('bars_ago')
+            f=r['features'];cross=(f.get('ema_cross_5m') or {}).get('bars_ago')
             if cross is not None:self._acc_result(cross_bars,cross,out)
             if f.get('daily_zone'):self._acc_result(daily_zones,f.get('daily_zone'),out)
             if f.get('five_zone'):self._acc_result(five_zones,f.get('five_zone'),out)
@@ -93,11 +106,12 @@ class ResearchStore:
                 sp=float(f.get('option_spread_pct'))
                 if sp>=0:spreads[out].append(sp)
             except (TypeError,ValueError):pass
+            mfe[out].append(r['mfe_pct']);mae[out].append(r['mae_pct'])
         for q in buckets.values():
             if q['w']:q['t1_sec']/=q['w']
             if q['l']:q['sl_sec']/=q['l']
-        avg_spread={k:(round(sum(v)/len(v),2) if v else 0.0) for k,v in spreads.items()}
-        return {'epoch':RESEARCH_EPOCH,'total':len(records),'open':open_count,'recovered':recovered,'buckets':buckets,'cross_bars':cross_bars,'daily_zones':daily_zones,'five_zones':five_zones,'avg_spread_pct':avg_spread}
+        avg=lambda values:round(sum(values)/len(values),2) if values else 0.0
+        return {'epoch':RESEARCH_EPOCH,'total':len(records),'open':open_count,'recovered':recovered,'buckets':buckets,'cross_bars':cross_bars,'daily_zones':daily_zones,'five_zones':five_zones,'avg_spread_pct':{k:avg(v) for k,v in spreads.items()},'avg_mfe_pct':{k:avg(v) for k,v in mfe.items()},'avg_mae_pct':{k:avg(v) for k,v in mae.items()}}
 
 class MarketReplay:
     """Historical underlying replay. Exact historical option premium is never fabricated."""
