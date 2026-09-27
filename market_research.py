@@ -5,11 +5,11 @@ from config import settings, logger
 from delta_market_service import delta_market_service
 from strategy_engine import ema, atr, vwap, directional_values
 
-RESEARCH_EPOCH='FRESH_V3_2026-09-27'
-RESEARCH_TABLE='delta_research_signals_v3'
+RESEARCH_EPOCH='FRESH_V3.1_2026-09-27'
+RESEARCH_TABLE='delta_research_signals_v31'
 
 class ResearchStore:
-    """Fresh V3 compact telemetry. Older research tables remain untouched and excluded."""
+    """Fresh V3.1 compact telemetry. Older research tables remain untouched and excluded."""
     def __init__(self):
         self.lock=threading.RLock();self.rows=deque(maxlen=250);self.pg=False;self.conn=None
         try:
@@ -27,7 +27,7 @@ class ResearchStore:
                         mae_pct DOUBLE PRECISION DEFAULT 0,updated_at TEXT NOT NULL)''')
                     cur.execute(f'ALTER TABLE {RESEARCH_TABLE} ADD COLUMN IF NOT EXISTS mfe_pct DOUBLE PRECISION DEFAULT 0')
                     cur.execute(f'ALTER TABLE {RESEARCH_TABLE} ADD COLUMN IF NOT EXISTS mae_pct DOUBLE PRECISION DEFAULT 0')
-                logger.info('[RESEARCH] Fresh V3 PostgreSQL telemetry enabled; old epochs excluded')
+                logger.info('[RESEARCH] Fresh V3.1 PostgreSQL telemetry enabled; older epochs excluded')
         except Exception as exc:
             logger.warning('[RESEARCH] PostgreSQL unavailable; bounded RAM fallback: %s',exc);self.pg=False;self.conn=None
 
