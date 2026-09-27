@@ -151,7 +151,9 @@ def contract_gate(underlying: str, action: str, *, entry, bid, ask, spot=None, d
     spread = a - b
     spread_pct = spread / mid * 100.0 if mid > 0 else 999.0
     cap = SPREAD_CAP_PCT.get(underlying, 3.0)
-    if spread_pct > cap:
+    # Numerical tolerance prevents a quote that is mathematically exactly at
+    # the allowed cap (e.g. 4.0%) from being rejected as 4.000000000000003.
+    if spread_pct > cap + 1e-9:
         return False, f'spread>{cap:.1f}%', {'spread_pct': spread_pct}
 
     min_premium = max(0.10, 10.0 * tick, 4.0 * spread)
@@ -175,7 +177,7 @@ def contract_gate(underlying: str, action: str, *, entry, bid, ask, spot=None, d
         if 0 <= mte < 90:
             return False, 'expiry<90m', {'spread_pct': spread_pct, 'minutes_to_expiry': mte}
         if 90 <= mte < 240:
-            if _f(python_score, 0) < 90 or spread_pct > 2.0 or d is None:
+            if _f(python_score, 0) < 90 or spread_pct > 2.0 + 1e-9 or d is None:
                 return False, 'near-expiry requires score>=90, spread<=2%, valid delta', {'spread_pct': spread_pct, 'minutes_to_expiry': mte}
 
     return True, 'CONTRACT_GATE_PASS', {
