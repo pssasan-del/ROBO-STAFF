@@ -8,6 +8,7 @@ from strategy_store import strategy_store
 from strategy_engine import engine
 from bot import telegram_bot
 from delta_signal_engine import delta_auto_engine
+from master_mind_scalp import master_mind_scalp_engine
 
 async def heartbeat_loop():
     """Lightweight internal health heartbeat. It does not bypass Render sleep; it confirms recovery once the service is awake."""
@@ -40,20 +41,23 @@ async def lifespan(app:FastAPI):
     print(f' [RESTORE] {restored} previously-active scanner(s) will resume automatically')
     print(' [UPLOAD] Telegram text/photo/PDF/TXT/MD/JSON strategy input: ENABLED')
     print(' [RECOVERY] Delta WS auto-reconnect + heartbeat: ENABLED')
+    print(' [MASTER MIND] BTCUSD 5m isolated scalp alerts: ENABLED')
     print(' [SAFETY] Auto-trading: DISABLED')
     print('='*58+'\n')
     engine.set_alert_callback(telegram_bot.alert)
     delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
+    master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)
     tasks=[
         asyncio.create_task(telegram_bot.poll(),name='telegram-poll'),
         asyncio.create_task(delta_market_service.websocket_loop(),name='delta-ws'),
         asyncio.create_task(engine.loop(),name='strategy-engine'),
         asyncio.create_task(delta_auto_engine.loop(),name='delta-auto-signal-engine'),
+        asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-5m-scalp'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
     logger.info('[APP] Delta-only crypto AI bot V9 started; restored_active=%s',restored)
     yield
-    telegram_bot.running=False;engine.running=False;delta_auto_engine.running=False;delta_market_service.running=False
+    telegram_bot.running=False;engine.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
     await asyncio.gather(*tasks,return_exceptions=True)
     await telegram_bot.client.aclose();await delta_market_service.close();await delta_options_service.client.aclose()
@@ -73,6 +77,8 @@ def health():
         'delta_ws_reconnects':delta_market_service.reconnect_count,
         'engine_heartbeat_age_seconds':round(now-engine.last_loop_heartbeat,1) if engine.last_loop_heartbeat else None,
         'last_scan_age_seconds':round(now-engine.last_scan_at,1) if engine.last_scan_at else None,
+        'master_mind_status':master_mind_scalp_engine.last_status,
+        'master_mind_last_scan_age_seconds':round(now-master_mind_scalp_engine.last_scan_at,1) if master_mind_scalp_engine.last_scan_at else None,
         'active_strategies':len(strategy_store.list_active()) if strategy_store.conn else 0,
         'database':'postgresql' if strategy_store.pg else 'sqlite',
         'photo_strategy_upload':True,

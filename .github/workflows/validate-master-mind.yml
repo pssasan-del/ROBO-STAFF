@@ -1,0 +1,60 @@
+name: Validate Master Mind BTC 5m Scalp
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate-master-mind:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Python syntax compile
+        run: |
+          python -m py_compile master_mind_scalp.py app.py delta_signal_engine.py polish_policy.py
+
+      - name: Validate isolation and locked indicator stack
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          mm = Path('master_mind_scalp.py').read_text()
+          app = Path('app.py').read_text()
+
+          required = [
+              'MASTER MIND SIGNAL ALERT',
+              'MASTER_MIND_BTC_5M_V1_2026-09-28',
+              '_mcginley_series',
+              '_momentum(closes, 10)',
+              '_ema(closes, 9)',
+              '_ema(closes, 95)',
+              'fibonacci_pivots',
+              'Volume',
+              'Breakout',
+              'Pullback',
+              'Exhaustion Reversal',
+              'SELL OTM PUT',
+              'SELL OTM CALL',
+              'SIGNAL ONLY',
+          ]
+          for needle in required:
+              assert needle in mm, needle
+
+          # Separate loop/callback: it must not use ROBO STAFF cooldown or stats.
+          assert 'master_mind_scalp_engine.loop()' in app
+          assert 'master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)' in app
+          for forbidden in [
+              'performance_store', 'research_store', 'BASE_COOLDOWN_MINUTES',
+              'FAIL_COOLDOWN_MINUTES', 'SUCCESS_COOLDOWN_MINUTES',
+              'place_order(', 'modify_order(', 'cancel_order(', 'square_off(',
+              'DELTA_API_KEY', 'DELTA_API_SECRET'
+          ]:
+              assert forbidden not in mm, forbidden
+
+          print('MASTER_MIND_ISOLATION_AND_STACK_OK')
+          PY
