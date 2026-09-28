@@ -2,35 +2,41 @@
 
 Signal-only strategy policy. No order execution methods live here.
 
-2026-09-28 scalp-research patch:
+2026-09-28 frequency-balance patch:
 - preserves strict BREAKOUT / RETEST rules;
-- preserves guarded mature MOMENTUM_CONTINUATION;
-- adds a slightly looser SCALP_CONTINUATION path so strong 5m trends can
-  produce research signals before a fresh 5m breakout is printed;
-- lowers only research alert selectivity, while option quote quality, SL,
-  cooldown, correlation and SIGNAL-ONLY protections remain unchanged.
+- preserves guarded MOMENTUM_CONTINUATION and SCALP_CONTINUATION;
+- adds a BIAS_SCALP / COUNTERTREND_SCALP research path when the old snapshot
+  reports MIXED but 15m+5m+1m (or 1h+5m+1m) provide a usable directional bias;
+- relaxes the 1m trigger only to EMA/DI micro-confirmation for scalp research;
+- keeps option quote quality, delta/expiry, dynamic SL, cooldown/correlation and
+  SIGNAL-ONLY protections intact.
+
+The engine aims for a usable research sample (roughly 3+ opportunities/day on
+active sessions) but never fabricates a signal simply to satisfy a quota.
 """
 from __future__ import annotations
 
 import math
 
 POLISH_VERSION = "FRESH_V3.2_2026-09-27"
-MODE_REVISION = "SCALP_RESEARCH_LOOSE_2026-09-28"
+MODE_REVISION = "FREQUENCY_BALANCED_SCALP_2026-09-28"
 MIN_ALERT_SCORE = 78
 STRONG_SCORE = 90
 ELITE_SCORE = 95
+DAILY_RESEARCH_TARGET = 3
 
 SPREAD_CAP_PCT = {"BTC": 2.5, "ETH": 3.0, "GOLD": 4.0}
 DAILY_SIGNAL_CAP = {"BTC": 6, "ETH": 6, "GOLD": 4}
 RVOL_MIN = {"BTC": 1.10, "ETH": 1.10, "GOLD": 1.00}
 MOMENTUM_RVOL_MIN = {"BTC": 0.85, "ETH": 0.85, "GOLD": 0.75}
 SCALP_RVOL_MIN = {"BTC": 0.70, "ETH": 0.70, "GOLD": 0.65}
+BIAS_RVOL_MIN = {"BTC": 0.50, "ETH": 0.50, "GOLD": 0.45}
 IMPULSE_RVOL_MIN = {"BTC": 1.10, "ETH": 1.10, "GOLD": 0.95}
 PREMIUM_SPOT_CAP = {"BTC": 0.0075, "ETH": 0.0075, "GOLD": 0.0100}
-BASE_COOLDOWN_MINUTES = 20
-SUCCESS_COOLDOWN_MINUTES = 15
-FAIL_COOLDOWN_MINUTES = 30
-CONTRACT_COOLDOWN_MINUTES = 30
+BASE_COOLDOWN_MINUTES = 15
+SUCCESS_COOLDOWN_MINUTES = 10
+FAIL_COOLDOWN_MINUTES = 20
+CONTRACT_COOLDOWN_MINUTES = 20
 CORRELATION_WINDOW_MINUTES = 15
 CORRELATION_THRESHOLD = 0.80
 
@@ -89,10 +95,7 @@ def _pivot_side_ok(direction: str, daily_zone: str, five_zone: str) -> bool:
 
 
 def _scalp_pivot_ok(direction: str, daily_zone: str, five_zone: str) -> bool:
-    """Slightly looser pivot rule for scalp research only.
-
-    The 5m pivot must agree. Daily may be neutral, but never strongly opposite.
-    """
+    """For scalp research, 5m pivot must agree; Daily must not be extreme opposite."""
     if direction == 'BULLISH':
         return five_zone in {'PIVOT_TO_R1', 'ABOVE_R1'} and daily_zone != 'BELOW_S1'
     if direction == 'BEARISH':
@@ -109,6 +112,69 @@ def _full_5m_stack(direction: str, s5: dict) -> bool:
     return False
 
 
+def _micro_trigger(direction: str, s1: dict) -> bool:
+    """Lightweight 1m confirmation used only for scalp research.
+
+    It does not require a new 3-bar breakout; it requires price/EMA5/EMA9 and DI
+    to agree on the latest completed 1m state. This specifically fixes the old
+    '1m execution trigger failed' dead-zone during smooth trend resumption.
+    """
+    px, e5, e9 = (_f(s1.get(k)) for k in ('price', 'ema5', 'ema9'))
+    pdi, mdi = _f(s1.get('plus_di')), _f(s1.get('minus_di'))
+    adx = _f(s1.get('adx'))
+    if direction == 'BULLISH':
+        return px > e5 > e9 and pdi > mdi and adx >= 8
+    if direction == 'BEARISH':
+        return px < e5 < e9 and mdi > pdi and adx >= 8
+    return False
+
+
+def _di_ratio(direction: str, state: dict) -> float:
+    pdi, mdi = _f(state.get('plus_di')), _f(state.get('minus_di'))
+    return (pdi / max(mdi, 1.0)) if direction == 'BULLISH' else (mdi / max(pdi, 1.0))
+
+
+def _strong_opposite(direction: str, state: dict) -> bool:
+    opposite = 'BEARISH' if direction == 'BULLISH' else 'BULLISH'
+    return _directional_ok(opposite, state, full_ema=True, min_adx=22) and _di_ratio(opposite, state) >= 1.20
+
+
+def _infer_mixed_bias(underlying: str, snap: dict):
+    """Infer a scalp-only direction when snapshot direction is MIXED.
+
+    Preferred route is 15m+5m+1m agreement with 1h only acting as a veto. A
+    controlled countertrend route is allowed only when 5m force is materially
+    stronger. A second fallback uses 1h+5m+1m when 15m is merely neutral.
+    """
+    tf = snap.get('tf') or {}
+    s1 = tf.get('1m') or {}; s5 = tf.get('5m') or {}; s15 = tf.get('15m') or {}; s1h = tf.get('1h') or {}
+
+    for direction in ('BULLISH', 'BEARISH'):
+        if not _full_5m_stack(direction, s5) or not _micro_trigger(direction, s1):
+            continue
+        fifteen = _directional_ok(direction, s15, full_ema=False, min_adx=12)
+        onehour = _directional_ok(direction, s1h, full_ema=True, min_adx=14)
+        opp_15 = _strong_opposite(direction, s15)
+        opp_1h = _strong_opposite(direction, s1h)
+        adx5 = _f(s5.get('adx')); ratio5 = _di_ratio(direction, s5); rvol5 = _f(s5.get('rel_volume'))
+
+        if fifteen and not opp_1h:
+            return direction, False, '15m+5m+1m bias; 1h not strongly opposite'
+
+        # Countertrend scalp: only when local force is strong enough to justify
+        # a short-duration research alert against the 1h stack.
+        counter_rvol = 0.80 if underlying != 'GOLD' else 0.70
+        if fifteen and opp_1h and adx5 >= 24 and ratio5 >= 1.30 and rvol5 >= counter_rvol:
+            return direction, True, 'countertrend 15m+5m+1m impulse against 1h'
+
+        # 15m can lag during fast reversals. 1h+5m+1m is accepted only if 15m
+        # is not strongly opposite.
+        if onehour and not opp_15:
+            return direction, False, '1h+5m+1m bias; 15m neutral/not strongly opposite'
+
+    return None, False, 'no directional bias from mixed state'
+
+
 def _continuation_breakout_ok(direction: str, snap: dict) -> bool:
     px = _f(snap.get('last_closed_5m'))
     level = _f(snap.get('breakout_level'))
@@ -123,53 +189,116 @@ def _compression(s5: dict) -> bool:
     return abs(e5 - e20) / px < 0.00035 and rvol < 0.90
 
 
+def _rewrite_setup_id(snap: dict, direction: str, pattern: str):
+    sid = str(snap.get('setup_id') or '')
+    parts = sid.split(':')
+    if len(parts) >= 4:
+        parts[1] = direction
+        parts[2] = pattern
+        snap['setup_id'] = ':'.join(parts)
+    else:
+        snap['setup_id'] = f"{snap.get('symbol','UNK')}:{direction}:{pattern}:{sid}"
+
+
 def _mark_momentum_pattern(snap: dict, *, pattern='MOMENTUM_CONTINUATION', relaxed_structure=False, impulse=False):
     snap['pattern'] = pattern
     snap['momentum_mode'] = True
-    snap['scalp_mode'] = pattern == 'SCALP_CONTINUATION'
+    snap['scalp_mode'] = pattern in {'SCALP_CONTINUATION', 'BIAS_SCALP', 'COUNTERTREND_SCALP'}
     snap['structure_relaxed'] = bool(relaxed_structure)
     snap['impulse_extension'] = bool(impulse)
-    sid = str(snap.get('setup_id') or '')
-    for old in (':NONE:', ':MOMENTUM_CONTINUATION:'):
-        if old in sid:
-            snap['setup_id'] = sid.replace(old, f':{pattern}:', 1)
-            break
+    _rewrite_setup_id(snap, str(snap.get('direction') or 'MIXED'), pattern)
 
 
 def evaluate_entry(underlying: str, action: str, snap: dict):
-    """V3.2 deterministic entry gates with controlled scalp-research relaxation.
+    """V3.2 deterministic gates with frequency-balanced scalp research.
 
     Priority order:
-    1) strict fresh BREAKOUT/RETEST;
-    2) mature 5m breakout continuation;
-    3) slightly looser SCALP_CONTINUATION using the already-required 1m trigger.
-
-    This remains research/signal-only; no execution behaviour is introduced.
+    1) strict BREAKOUT/RETEST;
+    2) mature MOMENTUM_CONTINUATION;
+    3) SCALP_CONTINUATION;
+    4) BIAS_SCALP / COUNTERTREND_SCALP when old snapshot direction is MIXED.
     """
     underlying = str(underlying or '').upper()
-    direction = str(snap.get('direction') or '').upper()
-    if direction not in {'BULLISH', 'BEARISH'}:
-        return False, 'mixed direction'
-
     tf = snap.get('tf') or {}
-    s5 = tf.get('5m') or {}; s15 = tf.get('15m') or {}; s1h = tf.get('1h') or {}
+    s1 = tf.get('1m') or {}; s5 = tf.get('5m') or {}; s15 = tf.get('15m') or {}; s1h = tf.get('1h') or {}
 
-    # Snapshot direction already requires aligned 1H+15m. Keep a sanity check,
-    # but slightly lower the policy-side ADX floor for scalp research.
+    direction = str(snap.get('direction') or '').upper()
+    bias_scalp = False
+    countertrend = False
+
+    if direction not in {'BULLISH', 'BEARISH'}:
+        inferred, countertrend, bias_reason = _infer_mixed_bias(underlying, snap)
+        if inferred is None:
+            return False, f'mixed direction: {bias_reason}'
+        direction = inferred
+        snap['direction'] = direction
+        snap['bias_scalp_mode'] = True
+        snap['countertrend_bias'] = bool(countertrend)
+        snap['bias_reason'] = bias_reason
+        snap['price_ema_aligned'] = _full_5m_stack(direction, s5)
+        snap['one_min_trigger'] = _micro_trigger(direction, s1)
+        snap['one_min_ema_hold'] = snap['one_min_trigger']
+        snap['micro_trigger'] = snap['one_min_trigger']
+        pattern = 'COUNTERTREND_SCALP' if countertrend else 'BIAS_SCALP'
+        _mark_momentum_pattern(snap, pattern=pattern, relaxed_structure=True, impulse=False)
+        bias_scalp = True
+
+    # For already directional snapshots, allow a micro 1m trend-resumption
+    # confirmation when the old breakout/hold trigger is false.
+    if direction in {'BULLISH', 'BEARISH'} and not snap.get('one_min_trigger') and _micro_trigger(direction, s1):
+        snap['one_min_trigger'] = True
+        snap['one_min_ema_hold'] = True
+        snap['micro_trigger'] = True
+
+    if not snap.get('price_ema_aligned'):
+        snap['price_ema_aligned'] = _full_5m_stack(direction, s5)
+    if not snap.get('price_ema_aligned'):
+        return False, '5m price/EMA alignment failed'
+    if not snap.get('one_min_trigger'):
+        return False, '1m execution/micro trigger failed'
+
+    structure = str(snap.get('structure') or '')
+    structure_strict = _directional_structure_ok(direction, structure)
+    adx = _f(s5.get('adx')); di_ratio = _di_ratio(direction, s5); rvol = _f(s5.get('rel_volume'))
+    daily_zone, five_zone = str(snap.get('daily_zone') or ''), str(snap.get('five_zone') or '')
+
+    # Frequency-balanced mixed-direction scalp path.
+    if bias_scalp:
+        if not _scalp_pivot_ok(direction, daily_zone, five_zone):
+            return False, 'bias scalp pivot alignment failed'
+        min_rvol = BIAS_RVOL_MIN.get(underlying, 0.50)
+        if countertrend:
+            ctr_rvol = 0.80 if underlying != 'GOLD' else 0.70
+            if adx < 24 or di_ratio < 1.30 or rvol < ctr_rvol:
+                return False, f'countertrend scalp force weak ({adx:.1f}/{di_ratio:.2f}/{rvol:.2f})'
+        else:
+            if adx < 18:
+                return False, f'bias scalp ADX<18 ({adx:.1f})'
+            if di_ratio < 1.08:
+                return False, f'bias scalp DI ratio<1.08 ({di_ratio:.2f})'
+            if rvol < min_rvol:
+                return False, f'bias scalp RVOL<{min_rvol:.2f} ({rvol:.2f})'
+
+        vwap_atr = _f(snap.get('vwap_distance_atr'))
+        ema9_atr = _f(snap.get('ema9_distance_atr'))
+        if vwap_atr > 2.50 or ema9_atr > 1.15:
+            return False, f'bias scalp overextended VWAP/EMA9 {vwap_atr:.2f}/{ema9_atr:.2f} ATR'
+        if not structure_strict and adx < (22 if countertrend else 20):
+            return False, f'bias scalp structure weak with ADX {adx:.1f}'
+        # Do not rely on distance_to_next_pivot_atr here because the legacy
+        # snapshot calculated that metric before MIXED direction was resolved.
+        rsi5, wr5 = _f(s5.get('rsi')), _f(s5.get('williams_r'))
+        if direction == 'BULLISH' and (rsi5 > 88 or wr5 > -1):
+            return False, 'bias bullish momentum exhausted'
+        if direction == 'BEARISH' and (rsi5 < 12 or wr5 < -99):
+            return False, 'bias bearish momentum exhausted'
+        return True, 'V3.2_COUNTERTREND_SCALP_PASS' if countertrend else 'V3.2_BIAS_SCALP_PASS'
+
+    # Normal directional paths retain HTF sanity checks.
     if not _directional_ok(direction, s1h, full_ema=True, min_adx=16):
         return False, '1H alignment failed'
     if not _directional_ok(direction, s15, full_ema=False, min_adx=16):
         return False, '15m alignment failed'
-    if not snap.get('price_ema_aligned'):
-        return False, '5m price/EMA5/EMA9 not aligned'
-    if not snap.get('one_min_trigger'):
-        return False, '1m execution trigger failed'
-
-    structure = str(snap.get('structure') or '')
-    structure_strict = _directional_structure_ok(direction, structure)
-    adx = _f(s5.get('adx')); pdi = _f(s5.get('plus_di')); mdi = _f(s5.get('minus_di')); rvol = _f(s5.get('rel_volume'))
-    di_ratio = (pdi / max(mdi, 1.0)) if direction == 'BULLISH' else (mdi / max(pdi, 1.0))
-    daily_zone, five_zone = str(snap.get('daily_zone') or ''), str(snap.get('five_zone') or '')
 
     cross = snap.get('ema_cross_5m') or {}
     bars_ago = cross.get('bars_ago')
@@ -189,8 +318,11 @@ def evaluate_entry(underlying: str, action: str, snap: dict):
             return False, 'fresh setup choppy/compressed'
         if snap.get('overextended'):
             return False, 'fresh setup overextended from VWAP/EMA9'
-        if adx < 21:
-            return False, '5m ADX<21'
+        # If the strict 1m trigger was replaced by micro confirmation, ask for a
+        # slightly stronger 5m tape before accepting a fresh breakout.
+        min_adx = 23 if snap.get('micro_trigger') else 21
+        if adx < min_adx:
+            return False, f'5m ADX<{min_adx}'
         if di_ratio < 1.15:
             return False, '5m DI ratio<1.15'
         if rvol < RVOL_MIN.get(underlying, 1.10):
@@ -214,8 +346,6 @@ def evaluate_entry(underlying: str, action: str, snap: dict):
         cleared_5m_breakout = _continuation_breakout_ok(direction, snap)
 
         if cleared_5m_breakout:
-            # Mature breakout continuation: looser than the original patch, but
-            # still asks for meaningful directional force.
             if adx < 23:
                 return False, f'momentum ADX<23 ({adx:.1f})'
             if di_ratio < 1.22:
@@ -258,10 +388,6 @@ def evaluate_entry(underlying: str, action: str, snap: dict):
                 impulse=(not normal_extension and impulse_extension),
             )
         else:
-            # SCALP_CONTINUATION: deliberately allows a signal before the 5m
-            # candle takes the previous 6-bar extreme. The 1m trigger is already
-            # mandatory, so this captures pullback/resumption scalps in a mature
-            # 5m trend without waiting for another full 5m breakout.
             if adx < 21:
                 return False, f'scalp ADX<21 ({adx:.1f})'
             if di_ratio < 1.15:
@@ -274,8 +400,6 @@ def evaluate_entry(underlying: str, action: str, snap: dict):
                 return False, f'scalp overextension VWAP/EMA9 {vwap_atr:.2f}/{ema9_atr:.2f} ATR'
             if room_atr < 0.35:
                 return False, f'scalp room<0.35ATR ({room_atr:.2f})'
-            # If price is already far beyond the 6-bar level in the opposite
-            # metric direction, it is a chase rather than a pullback scalp.
             if ext_atr > 1.10:
                 return False, f'scalp late/chasing >1.10ATR ({ext_atr:.2f})'
             _mark_momentum_pattern(
@@ -355,14 +479,14 @@ def evaluate_contract(premium, *, tick_size=None, bid=None, ask=None, underlying
 
 
 def quality_score(underlying: str, snap: dict, contract_score: float = 0.0) -> int:
-    """Calibrated 0-100 score. Call only after deterministic gates pass."""
+    """Calibrated 0-100 score. Call after deterministic gates pass."""
     direction = str(snap.get('direction') or '').upper()
-    tf = snap.get('tf') or {}; s1h=tf.get('1h') or {}; s15=tf.get('15m') or {}; s5=tf.get('5m') or {}
+    tf = snap.get('tf') or {}; s1=tf.get('1m') or {}; s1h=tf.get('1h') or {}; s15=tf.get('15m') or {}; s5=tf.get('5m') or {}
     score = 0.0
 
     if _directional_ok(direction, s1h, full_ema=True, min_adx=16): score += 10
     if _directional_ok(direction, s15, full_ema=True, min_adx=16): score += 10
-    elif _directional_ok(direction, s15, full_ema=False, min_adx=16): score += 5
+    elif _directional_ok(direction, s15, full_ema=False, min_adx=12): score += 5
 
     if _directional_structure_ok(direction, str(snap.get('structure') or '')):
         score += 8
@@ -370,17 +494,17 @@ def quality_score(underlying: str, snap: dict, contract_score: float = 0.0) -> i
         score += 4
 
     cross = snap.get('ema_cross_5m') or {}
-    if cross.get('bars_ago') in (0, 1):
+    if cross.get('bars_ago') in (0, 1) and str(cross.get('side') or '').upper() == direction:
         score += 7
-    elif snap.get('momentum_mode') and _full_5m_stack(direction, s5):
+    elif (snap.get('momentum_mode') or snap.get('bias_scalp_mode')) and _full_5m_stack(direction, s5):
         score += 5
 
-    if snap.get('pattern') in {'BREAKOUT', 'RETEST', 'MOMENTUM_CONTINUATION', 'SCALP_CONTINUATION'}:
+    if snap.get('pattern') in {'BREAKOUT', 'RETEST', 'MOMENTUM_CONTINUATION', 'SCALP_CONTINUATION', 'BIAS_SCALP', 'COUNTERTREND_SCALP'}:
         score += 5
 
-    adx, pdi, mdi, rvol = _f(s5.get('adx')), _f(s5.get('plus_di')), _f(s5.get('minus_di')), _f(s5.get('rel_volume'))
+    adx, rvol = _f(s5.get('adx')), _f(s5.get('rel_volume'))
     score += 7 if adx >= 28 else (5 if adx >= 24 else 3)
-    ratio = (pdi/max(mdi,1)) if direction == 'BULLISH' else (mdi/max(pdi,1))
+    ratio = _di_ratio(direction, s5)
     score += 4 if ratio >= 1.35 else 2
     score += 4 if rvol >= 1.50 else (3 if rvol >= 1.10 else 1)
 
@@ -390,16 +514,18 @@ def quality_score(underlying: str, snap: dict, contract_score: float = 0.0) -> i
     elif snap.get('pivot_extension_valid'): score += 4
     if ideal_five: score += 5
     elif snap.get('pivot_extension_valid'): score += 3
-    if _f(snap.get('distance_to_next_pivot_atr')) >= 0.75: score += 3
+    if not snap.get('bias_scalp_mode') and _f(snap.get('distance_to_next_pivot_atr')) >= 0.75:
+        score += 3
 
     if snap.get('one_min_breakout'): score += 6
     if snap.get('one_min_ema_hold'): score += 4
+    if snap.get('micro_trigger') and _micro_trigger(direction, s1): score += 6
 
     if not snap.get('overextended') and _f(snap.get('vwap_distance_atr')) <= 1.25:
         score += 5
     elif snap.get('impulse_extension'):
         score += 2
-    elif snap.get('scalp_mode') and _f(snap.get('vwap_distance_atr')) <= 2.0:
+    elif snap.get('scalp_mode') and _f(snap.get('vwap_distance_atr')) <= 2.20:
         score += 2
 
     rsi5, wr5 = _f(s5.get('rsi')), _f(s5.get('williams_r'))
@@ -410,8 +536,19 @@ def quality_score(underlying: str, snap: dict, contract_score: float = 0.0) -> i
         if 24 <= rsi5 <= 58: score += 3
         if -92 <= wr5 <= -15: score += 2
 
+    # Mixed-state bias scalps lose the old 1H alignment points by design, so a
+    # bounded bonus represents the independent 15m+5m+1m confluence. Countertrend
+    # alerts get a smaller bonus and are capped below STRONG quality.
+    if snap.get('bias_scalp_mode'):
+        score += 10 if snap.get('countertrend_bias') else 16
+
     score += max(0.0, min(10.0, _f(contract_score)))
-    return int(round(max(0.0, min(100.0, score))))
+    score = max(0.0, min(100.0, score))
+    if snap.get('countertrend_bias'):
+        score = min(score, 84.0)
+    elif snap.get('bias_scalp_mode'):
+        score = min(score, 89.0)
+    return int(round(score))
 
 
 def quality_label(score: int) -> str:
