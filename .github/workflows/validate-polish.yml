@@ -18,7 +18,7 @@ jobs:
         run: |
           python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py market_research.py performance_store.py bot.py config.py strategy_engine.py
 
-      - name: Validate V3.2 deterministic policy and momentum continuation
+      - name: Validate V3.2 adaptive momentum policy
         run: |
           python - <<'PY'
           from copy import deepcopy
@@ -29,7 +29,7 @@ jobs:
           )
 
           assert POLISH_VERSION == 'FRESH_V3.2_2026-09-27'
-          assert MODE_REVISION == 'MOMENTUM_CONTINUATION_2026-09-28'
+          assert MODE_REVISION == 'ADAPTIVE_MOMENTUM_2026-09-28'
           assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (82, 90, 95)
           assert ACCEPTANCE_CRITERIA['min_resolved'] == 50
           assert ACCEPTANCE_CRITERIA['min_profit_factor'] == 1.35
@@ -55,9 +55,7 @@ jobs:
           ok, reason = evaluate_entry('BTC','OPTION BUY',deepcopy(base))
           assert ok, reason
 
-          # Mature trend: no fresh cross, but full EMA stack + breakout + strong
-          # ADX/DI + usable RVOL + 1m trigger must be allowed as a scalp
-          # continuation rather than waiting for another EMA cross.
+          # Normal mature continuation after the original cross is old.
           momentum = deepcopy(base)
           momentum['pattern'] = 'NONE'
           momentum['setup_id'] = 'BTCUSD:BULLISH:NONE:456'
@@ -74,18 +72,49 @@ jobs:
           assert ok, reason
           assert momentum['pattern'] == 'MOMENTUM_CONTINUATION'
           assert momentum['momentum_mode'] is True
-          assert ':MOMENTUM_CONTINUATION:' in momentum['setup_id']
-          assert quality_score('BTC',momentum,10.0) >= 82
 
-          # Do not convert a late/chasing continuation into a signal.
-          chase = deepcopy(momentum)
-          chase['pattern'] = 'NONE'; chase['momentum_mode'] = False
-          chase['breakout_extension_atr'] = 0.90
-          assert evaluate_entry('BTC','OPTION BUY',chase)[0] is False
-          weak = deepcopy(momentum)
-          weak['pattern'] = 'NONE'; weak['momentum_mode'] = False
-          weak['tf']['5m']['adx'] = 23
+          # The old 6-vs-6 structure label may be RANGE during a genuine strong
+          # impulse. Strong ADX/DI/RVOL + full EMA stack + completed breakout
+          # is allowed only through the stricter soft-structure path.
+          soft = deepcopy(momentum)
+          soft['pattern']='NONE'; soft['momentum_mode']=False
+          soft['setup_id']='BTCUSD:BULLISH:NONE:789'
+          soft['structure']='RANGE'
+          soft['tf']['5m']['adx']=32
+          soft['tf']['5m']['plus_di']=36
+          soft['tf']['5m']['minus_di']=18
+          soft['tf']['5m']['rel_volume']=1.25
+          ok, reason = evaluate_entry('BTC','OPTION BUY',soft)
+          assert ok, reason
+          assert soft['structure_relaxed'] is True
+          assert quality_score('BTC',soft,10.0) >= 82
+
+          # Extended impulse: generic overextended flag must not short-circuit
+          # the dedicated strong-momentum limits.
+          impulse = deepcopy(soft)
+          impulse['pattern']='NONE'; impulse['momentum_mode']=False
+          impulse['overextended']=True
+          impulse['vwap_distance_atr']=2.10
+          impulse['ema9_distance_atr']=0.95
+          impulse['breakout_extension_atr']=0.78
+          impulse['distance_to_next_pivot_atr']=1.0
+          impulse['tf']['5m']['adx']=35
+          impulse['tf']['5m']['plus_di']=40
+          impulse['tf']['5m']['minus_di']=18
+          impulse['tf']['5m']['rel_volume']=1.40
+          ok, reason = evaluate_entry('BTC','OPTION BUY',impulse)
+          assert ok, reason
+          assert impulse['impulse_extension'] is True
+
+          # Still reject weak structure and true late chasing.
+          weak = deepcopy(soft)
+          weak['pattern']='NONE'; weak['momentum_mode']=False
+          weak['tf']['5m']['adx']=26
           assert evaluate_entry('BTC','OPTION BUY',weak)[0] is False
+          chase = deepcopy(impulse)
+          chase['pattern']='NONE'; chase['momentum_mode']=False
+          chase['breakout_extension_atr']=1.05
+          assert evaluate_entry('BTC','OPTION BUY',chase)[0] is False
 
           bad = deepcopy(base); bad['distance_to_next_pivot_atr']=0.5
           assert evaluate_entry('BTC','OPTION BUY',bad)[0] is False
@@ -108,7 +137,7 @@ jobs:
           assert ai_adjustment('CONFIRM',85) == 3
           assert ai_adjustment('REJECT',95) == -7
           assert ai_adjustment('WAIT',75) == -3
-          print('FRESH_V32_MOMENTUM_POLICY_TESTS_OK score=', score)
+          print('FRESH_V32_ADAPTIVE_MOMENTUM_TESTS_OK score=', score)
           PY
 
       - name: Validate implementation invariants
@@ -125,21 +154,16 @@ jobs:
           required_engine = [
               "entry=float(ask if action == 'OPTION BUY' else bid)",
               "option_snapshot.get('best_bid') if c.action == 'OPTION BUY' else option_snapshot.get('best_ask')",
-              "sl_breaches",
-              "loss_r>=1.35",
-              "WEAK/STALLED",
-              "INVALIDATED",
-              "STALE",
-              "CORRELATION_THRESHOLD",
-              "contract_rank_score",
-              "fib_r1",
-              "fib_s1",
+              "sl_breaches", "loss_r>=1.35", "WEAK/STALLED", "INVALIDATED", "STALE",
+              "CORRELATION_THRESHOLD", "contract_rank_score", "fib_r1", "fib_s1",
           ]
           for needle in required_engine:
               assert needle in engine, needle
 
           assert "FRESH_V3.2_2026-09-27" in policy
-          assert "MOMENTUM_CONTINUATION_2026-09-28" in policy
+          assert "ADAPTIVE_MOMENTUM_2026-09-28" in policy
+          assert "structure_relaxed" in policy
+          assert "impulse_extension" in policy
           assert "delta_research_signals_v32" in research
           assert "delta_signal_stats_v32" in stats
           assert "promotion_ready" in research
@@ -151,5 +175,5 @@ jobs:
           for needle in forbidden:
               assert needle not in engine, f'forbidden execution/private credential token: {needle}'
 
-          print('FRESH_V32_MOMENTUM_INVARIANTS_OK')
+          print('FRESH_V32_ADAPTIVE_INVARIANTS_OK')
           PY
