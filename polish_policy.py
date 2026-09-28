@@ -2,31 +2,30 @@
 
 Signal-only strategy policy. No order execution methods live here.
 
-2026-09-28 adaptive momentum patch:
-- preserves the original fresh BREAKOUT / one-bar RETEST path;
-- preserves the guarded MOMENTUM_CONTINUATION path;
-- removes the accidental global structure/overextension blocks that prevented
-  strong mature trends from ever reaching the continuation logic;
-- allows a stricter SOFT-STRUCTURE continuation when the completed 5m breakout,
-  EMA stack, ADX/DI/RVOL, HTF alignment and 1m trigger all agree;
-- allows a bounded EXTENDED-IMPULSE continuation only for unusually strong
-  momentum, while still rejecting late chases.
+2026-09-28 scalp-research patch:
+- preserves strict BREAKOUT / RETEST rules;
+- preserves guarded mature MOMENTUM_CONTINUATION;
+- adds a slightly looser SCALP_CONTINUATION path so strong 5m trends can
+  produce research signals before a fresh 5m breakout is printed;
+- lowers only research alert selectivity, while option quote quality, SL,
+  cooldown, correlation and SIGNAL-ONLY protections remain unchanged.
 """
 from __future__ import annotations
 
 import math
 
 POLISH_VERSION = "FRESH_V3.2_2026-09-27"
-MODE_REVISION = "ADAPTIVE_MOMENTUM_2026-09-28"
-MIN_ALERT_SCORE = 82
+MODE_REVISION = "SCALP_RESEARCH_LOOSE_2026-09-28"
+MIN_ALERT_SCORE = 78
 STRONG_SCORE = 90
 ELITE_SCORE = 95
 
 SPREAD_CAP_PCT = {"BTC": 2.5, "ETH": 3.0, "GOLD": 4.0}
 DAILY_SIGNAL_CAP = {"BTC": 6, "ETH": 6, "GOLD": 4}
-RVOL_MIN = {"BTC": 1.15, "ETH": 1.15, "GOLD": 1.05}
-MOMENTUM_RVOL_MIN = {"BTC": 1.00, "ETH": 1.00, "GOLD": 0.90}
-IMPULSE_RVOL_MIN = {"BTC": 1.20, "ETH": 1.20, "GOLD": 1.05}
+RVOL_MIN = {"BTC": 1.10, "ETH": 1.10, "GOLD": 1.00}
+MOMENTUM_RVOL_MIN = {"BTC": 0.85, "ETH": 0.85, "GOLD": 0.75}
+SCALP_RVOL_MIN = {"BTC": 0.70, "ETH": 0.70, "GOLD": 0.65}
+IMPULSE_RVOL_MIN = {"BTC": 1.10, "ETH": 1.10, "GOLD": 0.95}
 PREMIUM_SPOT_CAP = {"BTC": 0.0075, "ETH": 0.0075, "GOLD": 0.0100}
 BASE_COOLDOWN_MINUTES = 20
 SUCCESS_COOLDOWN_MINUTES = 15
@@ -89,6 +88,18 @@ def _pivot_side_ok(direction: str, daily_zone: str, five_zone: str) -> bool:
     return False
 
 
+def _scalp_pivot_ok(direction: str, daily_zone: str, five_zone: str) -> bool:
+    """Slightly looser pivot rule for scalp research only.
+
+    The 5m pivot must agree. Daily may be neutral, but never strongly opposite.
+    """
+    if direction == 'BULLISH':
+        return five_zone in {'PIVOT_TO_R1', 'ABOVE_R1'} and daily_zone != 'BELOW_S1'
+    if direction == 'BEARISH':
+        return five_zone in {'S1_TO_PIVOT', 'BELOW_S1'} and daily_zone != 'ABOVE_R1'
+    return False
+
+
 def _full_5m_stack(direction: str, s5: dict) -> bool:
     px, e5, e9, e20 = (_f(s5.get(k)) for k in ('price', 'ema5', 'ema9', 'ema20'))
     if direction == 'BULLISH':
@@ -109,26 +120,31 @@ def _continuation_breakout_ok(direction: str, snap: dict) -> bool:
 def _compression(s5: dict) -> bool:
     px = max(_f(s5.get('price')), 1e-9)
     e5, e20, rvol = _f(s5.get('ema5')), _f(s5.get('ema20')), _f(s5.get('rel_volume'))
-    return abs(e5 - e20) / px < 0.0004 and rvol < 1.10
+    return abs(e5 - e20) / px < 0.00035 and rvol < 0.90
 
 
-def _mark_momentum_pattern(snap: dict, *, relaxed_structure=False, impulse=False):
-    snap['pattern'] = 'MOMENTUM_CONTINUATION'
+def _mark_momentum_pattern(snap: dict, *, pattern='MOMENTUM_CONTINUATION', relaxed_structure=False, impulse=False):
+    snap['pattern'] = pattern
     snap['momentum_mode'] = True
+    snap['scalp_mode'] = pattern == 'SCALP_CONTINUATION'
     snap['structure_relaxed'] = bool(relaxed_structure)
     snap['impulse_extension'] = bool(impulse)
     sid = str(snap.get('setup_id') or '')
-    if ':NONE:' in sid:
-        snap['setup_id'] = sid.replace(':NONE:', ':MOMENTUM_CONTINUATION:', 1)
+    for old in (':NONE:', ':MOMENTUM_CONTINUATION:'):
+        if old in sid:
+            snap['setup_id'] = sid.replace(old, f':{pattern}:', 1)
+            break
 
 
 def evaluate_entry(underlying: str, action: str, snap: dict):
-    """V3.2 deterministic entry gates with adaptive mature-trend continuation.
+    """V3.2 deterministic entry gates with controlled scalp-research relaxation.
 
-    Fresh BREAKOUT/RETEST remains the preferred path and still requires strict
-    structure and the original conservative extension rules. Mature trends are
-    evaluated separately so an old EMA cross or a non-perfect 6-vs-6 structure
-    label cannot by itself suppress an otherwise strong continuation scalp.
+    Priority order:
+    1) strict fresh BREAKOUT/RETEST;
+    2) mature 5m breakout continuation;
+    3) slightly looser SCALP_CONTINUATION using the already-required 1m trigger.
+
+    This remains research/signal-only; no execution behaviour is introduced.
     """
     underlying = str(underlying or '').upper()
     direction = str(snap.get('direction') or '').upper()
@@ -138,23 +154,22 @@ def evaluate_entry(underlying: str, action: str, snap: dict):
     tf = snap.get('tf') or {}
     s5 = tf.get('5m') or {}; s15 = tf.get('15m') or {}; s1h = tf.get('1h') or {}
 
-    if not _directional_ok(direction, s1h, full_ema=True, min_adx=18):
-        return False, '1H alignment/ADX failed'
-    if not _directional_ok(direction, s15, full_ema=False, min_adx=18):
-        return False, '15m alignment/ADX failed'
+    # Snapshot direction already requires aligned 1H+15m. Keep a sanity check,
+    # but slightly lower the policy-side ADX floor for scalp research.
+    if not _directional_ok(direction, s1h, full_ema=True, min_adx=16):
+        return False, '1H alignment failed'
+    if not _directional_ok(direction, s15, full_ema=False, min_adx=16):
+        return False, '15m alignment failed'
     if not snap.get('price_ema_aligned'):
         return False, '5m price/EMA5/EMA9 not aligned'
     if not snap.get('one_min_trigger'):
         return False, '1m execution trigger failed'
 
-    daily_zone, five_zone = str(snap.get('daily_zone') or ''), str(snap.get('five_zone') or '')
-    if not _pivot_side_ok(direction, daily_zone, five_zone):
-        return False, 'Daily/5m pivot side opposes direction'
-
     structure = str(snap.get('structure') or '')
     structure_strict = _directional_structure_ok(direction, structure)
     adx = _f(s5.get('adx')); pdi = _f(s5.get('plus_di')); mdi = _f(s5.get('minus_di')); rvol = _f(s5.get('rel_volume'))
     di_ratio = (pdi / max(mdi, 1.0)) if direction == 'BULLISH' else (mdi / max(pdi, 1.0))
+    daily_zone, five_zone = str(snap.get('daily_zone') or ''), str(snap.get('five_zone') or '')
 
     cross = snap.get('ema_cross_5m') or {}
     bars_ago = cross.get('bars_ago')
@@ -166,92 +181,118 @@ def evaluate_entry(underlying: str, action: str, snap: dict):
     )
 
     if fresh_path:
+        if not _pivot_side_ok(direction, daily_zone, five_zone):
+            return False, 'fresh Daily/5m pivot side opposes direction'
         if not structure_strict:
             return False, f'{direction.lower()} fresh structure invalid'
         if snap.get('choppy'):
             return False, 'fresh setup choppy/compressed'
         if snap.get('overextended'):
             return False, 'fresh setup overextended from VWAP/EMA9'
-        if adx < 22:
-            return False, '5m ADX<22'
-        if di_ratio < 1.20:
-            return False, '5m DI ratio<1.20'
-        if rvol < RVOL_MIN.get(underlying, 1.15):
-            return False, f'5m RVOL<{RVOL_MIN.get(underlying, 1.15):.2f}'
-        if _f(snap.get('distance_to_next_pivot_atr')) < 0.75:
+        if adx < 21:
+            return False, '5m ADX<21'
+        if di_ratio < 1.15:
+            return False, '5m DI ratio<1.15'
+        if rvol < RVOL_MIN.get(underlying, 1.10):
+            return False, f'5m RVOL<{RVOL_MIN.get(underlying, 1.10):.2f}'
+        if _f(snap.get('distance_to_next_pivot_atr')) < 0.60:
             return False, 'insufficient room to next pivot/swing'
-        if _f(snap.get('breakout_extension_atr')) > 0.80:
-            return False, 'late breakout extension>0.80 ATR'
+        if _f(snap.get('breakout_extension_atr')) > 0.90:
+            return False, 'late breakout extension>0.90 ATR'
     else:
         if not _full_5m_stack(direction, s5):
             return False, 'no fresh cross and no full 5m continuation stack'
-        if not _continuation_breakout_ok(direction, snap):
-            return False, 'momentum continuation has not cleared 5m breakout level'
         if _compression(s5):
             return False, 'momentum EMA5/20 compression'
-        if adx < 25:
-            return False, f'momentum ADX<25 ({adx:.1f})'
-        if di_ratio < 1.35:
-            return False, f'momentum DI ratio<1.35 ({di_ratio:.2f})'
-        if rvol < MOMENTUM_RVOL_MIN.get(underlying, 1.0):
-            return False, f'momentum RVOL<{MOMENTUM_RVOL_MIN.get(underlying, 1.0):.2f} ({rvol:.2f})'
-
-        # The old 6-vs-6 HH/HL/LH/LL classifier can briefly report RANGE or
-        # the wrong label during a strong impulse. For continuation only, allow
-        # that label to be overridden by stronger completed-bar evidence.
-        relaxed_structure = False
-        if not structure_strict:
-            soft_rvol = max(MOMENTUM_RVOL_MIN.get(underlying, 1.0), 1.05 if underlying != 'GOLD' else 0.95)
-            if adx < 28 or di_ratio < 1.50 or rvol < soft_rvol:
-                return False, (
-                    f'{direction.lower()} structure invalid; soft continuation needs '
-                    f'ADX>=28/DI>=1.50/RVOL>={soft_rvol:.2f} '
-                    f'(got {adx:.1f}/{di_ratio:.2f}/{rvol:.2f})'
-                )
-            relaxed_structure = True
+        if not _scalp_pivot_ok(direction, daily_zone, five_zone):
+            return False, 'scalp pivot alignment failed'
 
         vwap_atr = _f(snap.get('vwap_distance_atr'))
         ema9_atr = _f(snap.get('ema9_distance_atr'))
         ext_atr = _f(snap.get('breakout_extension_atr'))
         room_atr = _f(snap.get('distance_to_next_pivot_atr'))
+        cleared_5m_breakout = _continuation_breakout_ok(direction, snap)
 
-        # Normal mature continuation limits.
-        normal_extension = (
-            vwap_atr <= 1.75 and ema9_atr <= 0.75 and
-            ext_atr <= 0.65 and room_atr >= 0.60
-        )
+        if cleared_5m_breakout:
+            # Mature breakout continuation: looser than the original patch, but
+            # still asks for meaningful directional force.
+            if adx < 23:
+                return False, f'momentum ADX<23 ({adx:.1f})'
+            if di_ratio < 1.22:
+                return False, f'momentum DI ratio<1.22 ({di_ratio:.2f})'
+            if rvol < MOMENTUM_RVOL_MIN.get(underlying, 0.85):
+                return False, f'momentum RVOL<{MOMENTUM_RVOL_MIN.get(underlying, 0.85):.2f} ({rvol:.2f})'
 
-        # A controlled exception for high-energy impulse markets. This is not a
-        # generic relaxation: all strength conditions and absolute chase caps
-        # must pass. It exists specifically for fast BTC/ETH/XAUT sessions where
-        # VWAP/EMA9 lag price during a genuine directional impulse.
-        impulse_rvol = IMPULSE_RVOL_MIN.get(underlying, 1.20)
-        impulse_strength = adx >= 32 and di_ratio >= 1.55 and rvol >= impulse_rvol
-        impulse_extension = (
-            impulse_strength and
-            vwap_atr <= 2.40 and ema9_atr <= 1.10 and
-            ext_atr <= 0.85 and room_atr >= 0.75
-        )
-        if not normal_extension and not impulse_extension:
-            return False, (
-                'momentum extension/room failed '
-                f'(VWAP {vwap_atr:.2f}ATR, EMA9 {ema9_atr:.2f}ATR, '
-                f'breakout {ext_atr:.2f}ATR, room {room_atr:.2f}ATR, '
-                f'ADX {adx:.1f}, DI {di_ratio:.2f}, RVOL {rvol:.2f})'
+            relaxed_structure = False
+            if not structure_strict:
+                soft_rvol = max(MOMENTUM_RVOL_MIN.get(underlying, 0.85), 0.90 if underlying != 'GOLD' else 0.80)
+                if adx < 25 or di_ratio < 1.30 or rvol < soft_rvol:
+                    return False, (
+                        f'{direction.lower()} structure soft-fail; needs '
+                        f'ADX>=25/DI>=1.30/RVOL>={soft_rvol:.2f} '
+                        f'(got {adx:.1f}/{di_ratio:.2f}/{rvol:.2f})'
+                    )
+                relaxed_structure = True
+
+            normal_extension = (
+                vwap_atr <= 2.00 and ema9_atr <= 0.90 and
+                ext_atr <= 0.80 and room_atr >= 0.45
+            )
+            impulse_rvol = IMPULSE_RVOL_MIN.get(underlying, 1.10)
+            impulse_strength = adx >= 29 and di_ratio >= 1.40 and rvol >= impulse_rvol
+            impulse_extension = (
+                impulse_strength and vwap_atr <= 2.60 and ema9_atr <= 1.20 and
+                ext_atr <= 1.00 and room_atr >= 0.55
+            )
+            if not normal_extension and not impulse_extension:
+                return False, (
+                    'momentum extension/room failed '
+                    f'(VWAP {vwap_atr:.2f}ATR, EMA9 {ema9_atr:.2f}ATR, '
+                    f'breakout {ext_atr:.2f}ATR, room {room_atr:.2f}ATR, '
+                    f'ADX {adx:.1f}, DI {di_ratio:.2f}, RVOL {rvol:.2f})'
+                )
+            _mark_momentum_pattern(
+                snap,
+                pattern='MOMENTUM_CONTINUATION',
+                relaxed_structure=relaxed_structure,
+                impulse=(not normal_extension and impulse_extension),
+            )
+        else:
+            # SCALP_CONTINUATION: deliberately allows a signal before the 5m
+            # candle takes the previous 6-bar extreme. The 1m trigger is already
+            # mandatory, so this captures pullback/resumption scalps in a mature
+            # 5m trend without waiting for another full 5m breakout.
+            if adx < 21:
+                return False, f'scalp ADX<21 ({adx:.1f})'
+            if di_ratio < 1.15:
+                return False, f'scalp DI ratio<1.15 ({di_ratio:.2f})'
+            if rvol < SCALP_RVOL_MIN.get(underlying, 0.70):
+                return False, f'scalp RVOL<{SCALP_RVOL_MIN.get(underlying, 0.70):.2f} ({rvol:.2f})'
+            if not structure_strict and (adx < 24 or di_ratio < 1.25):
+                return False, f'scalp soft structure needs ADX>=24/DI>=1.25 ({adx:.1f}/{di_ratio:.2f})'
+            if vwap_atr > 2.20 or ema9_atr > 1.00:
+                return False, f'scalp overextension VWAP/EMA9 {vwap_atr:.2f}/{ema9_atr:.2f} ATR'
+            if room_atr < 0.35:
+                return False, f'scalp room<0.35ATR ({room_atr:.2f})'
+            # If price is already far beyond the 6-bar level in the opposite
+            # metric direction, it is a chase rather than a pullback scalp.
+            if ext_atr > 1.10:
+                return False, f'scalp late/chasing >1.10ATR ({ext_atr:.2f})'
+            _mark_momentum_pattern(
+                snap,
+                pattern='SCALP_CONTINUATION',
+                relaxed_structure=not structure_strict,
+                impulse=False,
             )
 
-        _mark_momentum_pattern(
-            snap,
-            relaxed_structure=relaxed_structure,
-            impulse=(not normal_extension and impulse_extension),
-        )
-
     rsi5, wr5 = _f(s5.get('rsi')), _f(s5.get('williams_r'))
-    if direction == 'BULLISH' and (rsi5 > 82 or wr5 > -3):
-        return False, 'bullish momentum already exhausted'
-    if direction == 'BEARISH' and (rsi5 < 18 or wr5 < -97):
-        return False, 'bearish momentum already exhausted'
+    if direction == 'BULLISH' and (rsi5 > 86 or wr5 > -1):
+        return False, 'bullish momentum exhausted'
+    if direction == 'BEARISH' and (rsi5 < 14 or wr5 < -99):
+        return False, 'bearish momentum exhausted'
 
+    if snap.get('scalp_mode'):
+        return True, 'V3.2_SCALP_RESEARCH_PASS'
     if snap.get('impulse_extension'):
         return True, 'V3.2_EXTENDED_IMPULSE_PASS'
     if snap.get('structure_relaxed'):
@@ -314,14 +355,14 @@ def evaluate_contract(premium, *, tick_size=None, bid=None, ask=None, underlying
 
 
 def quality_score(underlying: str, snap: dict, contract_score: float = 0.0) -> int:
-    """Calibrated 0-100 score. Call only after deterministic hard gates pass."""
+    """Calibrated 0-100 score. Call only after deterministic gates pass."""
     direction = str(snap.get('direction') or '').upper()
     tf = snap.get('tf') or {}; s1h=tf.get('1h') or {}; s15=tf.get('15m') or {}; s5=tf.get('5m') or {}
     score = 0.0
 
-    if _directional_ok(direction, s1h, full_ema=True, min_adx=18): score += 10
-    if _directional_ok(direction, s15, full_ema=True, min_adx=18): score += 10
-    elif _directional_ok(direction, s15, full_ema=False, min_adx=18): score += 5
+    if _directional_ok(direction, s1h, full_ema=True, min_adx=16): score += 10
+    if _directional_ok(direction, s15, full_ema=True, min_adx=16): score += 10
+    elif _directional_ok(direction, s15, full_ema=False, min_adx=16): score += 5
 
     if _directional_structure_ok(direction, str(snap.get('structure') or '')):
         score += 8
@@ -334,14 +375,14 @@ def quality_score(underlying: str, snap: dict, contract_score: float = 0.0) -> i
     elif snap.get('momentum_mode') and _full_5m_stack(direction, s5):
         score += 5
 
-    if snap.get('pattern') in {'BREAKOUT', 'RETEST', 'MOMENTUM_CONTINUATION'}:
+    if snap.get('pattern') in {'BREAKOUT', 'RETEST', 'MOMENTUM_CONTINUATION', 'SCALP_CONTINUATION'}:
         score += 5
 
     adx, pdi, mdi, rvol = _f(s5.get('adx')), _f(s5.get('plus_di')), _f(s5.get('minus_di')), _f(s5.get('rel_volume'))
-    score += 7 if adx >= 28 else (5 if adx >= 25 else 3)
+    score += 7 if adx >= 28 else (5 if adx >= 24 else 3)
     ratio = (pdi/max(mdi,1)) if direction == 'BULLISH' else (mdi/max(pdi,1))
     score += 4 if ratio >= 1.35 else 2
-    score += 4 if rvol >= 1.50 else (3 if rvol >= 1.25 else 1)
+    score += 4 if rvol >= 1.50 else (3 if rvol >= 1.10 else 1)
 
     ideal_daily = snap.get('daily_zone') == ('PIVOT_TO_R1' if direction == 'BULLISH' else 'S1_TO_PIVOT')
     ideal_five = snap.get('five_zone') == ('PIVOT_TO_R1' if direction == 'BULLISH' else 'S1_TO_PIVOT')
@@ -349,23 +390,25 @@ def quality_score(underlying: str, snap: dict, contract_score: float = 0.0) -> i
     elif snap.get('pivot_extension_valid'): score += 4
     if ideal_five: score += 5
     elif snap.get('pivot_extension_valid'): score += 3
-    if _f(snap.get('distance_to_next_pivot_atr')) >= 1.0: score += 3
+    if _f(snap.get('distance_to_next_pivot_atr')) >= 0.75: score += 3
 
     if snap.get('one_min_breakout'): score += 6
     if snap.get('one_min_ema_hold'): score += 4
 
-    if not snap.get('overextended') and _f(snap.get('vwap_distance_atr')) <= 1.0:
+    if not snap.get('overextended') and _f(snap.get('vwap_distance_atr')) <= 1.25:
         score += 5
     elif snap.get('impulse_extension'):
+        score += 2
+    elif snap.get('scalp_mode') and _f(snap.get('vwap_distance_atr')) <= 2.0:
         score += 2
 
     rsi5, wr5 = _f(s5.get('rsi')), _f(s5.get('williams_r'))
     if direction == 'BULLISH':
-        if 45 <= rsi5 <= 72: score += 3
-        if -80 <= wr5 <= -10: score += 2
+        if 42 <= rsi5 <= 76: score += 3
+        if -85 <= wr5 <= -8: score += 2
     else:
-        if 28 <= rsi5 <= 55: score += 3
-        if -90 <= wr5 <= -20: score += 2
+        if 24 <= rsi5 <= 58: score += 3
+        if -92 <= wr5 <= -15: score += 2
 
     score += max(0.0, min(10.0, _f(contract_score)))
     return int(round(max(0.0, min(100.0, score))))
