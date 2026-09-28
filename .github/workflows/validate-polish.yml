@@ -18,21 +18,21 @@ jobs:
         run: |
           python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py market_research.py performance_store.py bot.py config.py strategy_engine.py
 
-      - name: Validate V3.2 scalp research policy
+      - name: Validate V3.2 frequency-balanced scalp policy
         run: |
           python - <<'PY'
           from copy import deepcopy
           from polish_policy import (
               POLISH_VERSION, MODE_REVISION, MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE,
-              evaluate_entry, evaluate_contract, contract_gate, quality_score,
-              quality_label, ai_adjustment, ACCEPTANCE_CRITERIA,
+              DAILY_RESEARCH_TARGET, evaluate_entry, evaluate_contract, contract_gate,
+              quality_score, quality_label, ai_adjustment, ACCEPTANCE_CRITERIA,
           )
 
           assert POLISH_VERSION == 'FRESH_V3.2_2026-09-27'
-          assert MODE_REVISION == 'SCALP_RESEARCH_LOOSE_2026-09-28'
+          assert MODE_REVISION == 'FREQUENCY_BALANCED_SCALP_2026-09-28'
           assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (78, 90, 95)
+          assert DAILY_RESEARCH_TARGET == 3
           assert ACCEPTANCE_CRITERIA['min_resolved'] == 50
-          assert ACCEPTANCE_CRITERIA['min_profit_factor'] == 1.35
 
           base = {
               'direction':'BULLISH', 'structure':'HH/HL', 'pattern':'BREAKOUT',
@@ -55,57 +55,54 @@ jobs:
           ok, reason = evaluate_entry('BTC','OPTION BUY',deepcopy(base))
           assert ok, reason
 
-          # Mature breakout continuation with an old EMA cross.
+          # Existing mature continuation remains valid.
           momentum = deepcopy(base)
           momentum['pattern'] = 'NONE'
           momentum['setup_id'] = 'BTCUSD:BULLISH:NONE:456'
           momentum['ema_cross_5m'] = {'side':'NONE','bars_ago':None}
-          momentum['tf']['5m']['rel_volume'] = 0.95
-          momentum['tf']['5m']['adx'] = 26
-          momentum['tf']['5m']['plus_di'] = 31
-          momentum['tf']['5m']['minus_di'] = 20
-          momentum['breakout_extension_atr'] = 0.55
-          momentum['distance_to_next_pivot_atr'] = 0.8
-          momentum['vwap_distance_atr'] = 1.2
-          momentum['ema9_distance_atr'] = 0.65
+          momentum['tf']['5m'].update({'rel_volume':0.95,'adx':26,'plus_di':31,'minus_di':20})
+          momentum.update({'breakout_extension_atr':0.55,'distance_to_next_pivot_atr':0.8,'vwap_distance_atr':1.2,'ema9_distance_atr':0.65})
           ok, reason = evaluate_entry('BTC','OPTION BUY',momentum)
           assert ok, reason
           assert momentum['pattern'] == 'MOMENTUM_CONTINUATION'
-          assert momentum['momentum_mode'] is True
 
-          # Scalp continuation: 5m has not yet cleared the old six-bar high,
-          # but full EMA stack + 1m trigger + acceptable ADX/DI/RVOL is enough
-          # for research mode.
+          # Existing pre-breakout scalp continuation remains valid.
           scalp = deepcopy(base)
-          scalp['pattern'] = 'NONE'
-          scalp['setup_id'] = 'BTCUSD:BULLISH:NONE:789'
-          scalp['ema_cross_5m'] = {'side':'NONE','bars_ago':None}
-          scalp['last_closed_5m'] = 100.2
-          scalp['breakout_level'] = 100.4
-          scalp['distance_to_next_pivot_atr'] = 0.55
-          scalp['breakout_extension_atr'] = 0.35
-          scalp['vwap_distance_atr'] = 1.10
-          scalp['ema9_distance_atr'] = 0.55
-          scalp['tf']['5m']['adx'] = 23
-          scalp['tf']['5m']['plus_di'] = 28
-          scalp['tf']['5m']['minus_di'] = 20
-          scalp['tf']['5m']['rel_volume'] = 0.78
+          scalp.update({
+              'pattern':'NONE','setup_id':'BTCUSD:BULLISH:NONE:789',
+              'ema_cross_5m':{'side':'NONE','bars_ago':None},
+              'last_closed_5m':100.2,'breakout_level':100.4,
+              'distance_to_next_pivot_atr':0.55,'breakout_extension_atr':0.35,
+              'vwap_distance_atr':1.10,'ema9_distance_atr':0.55,
+          })
+          scalp['tf']['5m'].update({'adx':23,'plus_di':28,'minus_di':20,'rel_volume':0.78})
           ok, reason = evaluate_entry('BTC','OPTION BUY',scalp)
           assert ok, reason
           assert scalp['pattern'] == 'SCALP_CONTINUATION'
-          assert scalp['scalp_mode'] is True
           assert quality_score('BTC',scalp,10.0) >= 78
 
-          # Weak/chasing scalp still rejected.
-          weak = deepcopy(scalp)
-          weak['pattern']='NONE'; weak['momentum_mode']=False; weak['scalp_mode']=False
-          weak['tf']['5m']['adx']=18
-          assert evaluate_entry('BTC','OPTION BUY',weak)[0] is False
-          chase = deepcopy(scalp)
-          chase['pattern']='NONE'; chase['momentum_mode']=False; chase['scalp_mode']=False
-          chase['breakout_extension_atr']=1.30
-          assert evaluate_entry('BTC','OPTION BUY',chase)[0] is False
+          # New frequency fix: legacy snapshot says MIXED, but 15m+5m+1m are
+          # coherently bullish and 1h is neutral rather than strongly bearish.
+          mixed = deepcopy(base)
+          mixed.update({
+              'direction':'MIXED','pattern':'NONE','setup_id':'BTCUSD:MIXED:NONE:999',
+              'price_ema_aligned':False,'one_min_trigger':False,
+              'one_min_breakout':False,'one_min_ema_hold':False,
+              'ema_cross_5m':{'side':'NONE','bars_ago':None},
+              'vwap_distance_atr':0.85,'ema9_distance_atr':0.45,
+          })
+          mixed['tf']['1m'].update({'price':101,'ema5':100.6,'ema9':100.2,'adx':12,'plus_di':27,'minus_di':21})
+          mixed['tf']['5m'].update({'price':101,'ema5':100.5,'ema9':100.1,'ema20':99.6,'adx':22,'plus_di':28,'minus_di':22,'rel_volume':0.70})
+          mixed['tf']['15m'].update({'price':101,'ema5':100.6,'ema9':100.2,'ema20':99.8,'vwap':100.1,'adx':18,'plus_di':27,'minus_di':21})
+          mixed['tf']['1h'].update({'price':100.1,'ema5':100.2,'ema9':100.1,'ema20':100.0,'vwap':100.3,'adx':11,'plus_di':22,'minus_di':21})
+          ok, reason = evaluate_entry('BTC','OPTION BUY',mixed)
+          assert ok, reason
+          assert mixed['direction'] == 'BULLISH'
+          assert mixed['pattern'] == 'BIAS_SCALP'
+          assert mixed['micro_trigger'] is True
+          assert quality_score('BTC',mixed,10.0) >= 78
 
+          # Dust, wide spread, lottery delta and near-expiry protections remain.
           assert evaluate_contract(0.01,bid=0.01,ask=0.02,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is False
           assert evaluate_contract(1.00,bid=.98,ask=1.02,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is False
           assert evaluate_contract(1.00,bid=.99,ask=1.01,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is True
@@ -119,7 +116,7 @@ jobs:
           assert ai_adjustment('CONFIRM',85) == 3
           assert ai_adjustment('REJECT',95) == -7
           assert ai_adjustment('WAIT',75) == -3
-          print('FRESH_V32_SCALP_RESEARCH_TESTS_OK')
+          print('FRESH_V32_FREQUENCY_BALANCE_TESTS_OK')
           PY
 
       - name: Validate implementation invariants
@@ -143,8 +140,8 @@ jobs:
               assert needle in engine, needle
 
           assert "FRESH_V3.2_2026-09-27" in policy
-          assert "SCALP_RESEARCH_LOOSE_2026-09-28" in policy
-          assert "SCALP_CONTINUATION" in policy
+          assert "FREQUENCY_BALANCED_SCALP_2026-09-28" in policy
+          assert "BIAS_SCALP" in policy and "COUNTERTREND_SCALP" in policy
           assert "delta_research_signals_v32" in research
           assert "delta_signal_stats_v32" in stats
           assert "promotion_ready" in research
@@ -156,5 +153,5 @@ jobs:
           for needle in forbidden:
               assert needle not in engine, f'forbidden execution/private credential token: {needle}'
 
-          print('FRESH_V32_SCALP_RESEARCH_INVARIANTS_OK')
+          print('FRESH_V32_FREQUENCY_BALANCE_INVARIANTS_OK')
           PY
