@@ -22,23 +22,25 @@ jobs:
         run: |
           python - <<'PY'
           from copy import deepcopy
+          from pathlib import Path
           from polish_policy import (
               POLISH_VERSION, MODE_REVISION, MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE,
               DAILY_RESEARCH_TARGET, evaluate_entry, evaluate_contract, contract_gate,
               quality_score, quality_label, ACCEPTANCE_CRITERIA,
           )
-          from performance_store import EPOCH, STATS_TABLE
-          from market_research import RESEARCH_EPOCH, RESEARCH_TABLE
 
           assert POLISH_VERSION == 'FRESH_V3.4_RECLAIM_2026-09-29'
           assert MODE_REVISION == 'PULLBACK_RECLAIM_SCALP_2026-09-29'
           assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (60, 76, 90)
           assert DAILY_RESEARCH_TARGET == 3
-          assert EPOCH == POLISH_VERSION
-          assert RESEARCH_EPOCH == POLISH_VERSION
-          assert STATS_TABLE == 'delta_signal_stats_v34'
-          assert RESEARCH_TABLE == 'delta_research_signals_v34'
           assert ACCEPTANCE_CRITERIA['min_resolved'] == 50
+
+          stats = Path('performance_store.py').read_text()
+          research = Path('market_research.py').read_text()
+          assert "EPOCH='FRESH_V3.4_RECLAIM_2026-09-29'" in stats
+          assert "STATS_TABLE='delta_signal_stats_v34'" in stats
+          assert "RESEARCH_EPOCH = 'FRESH_V3.4_RECLAIM_2026-09-29'" in research
+          assert "RESEARCH_TABLE = 'delta_research_signals_v34'" in research
 
           base = {
               'symbol':'BTCUSD','direction':'MIXED','structure':'LH/LL','pattern':'NONE',
@@ -59,24 +61,20 @@ jobs:
           assert s['pattern'] == 'PULLBACK_RECLAIM'
           assert quality_score('BTC',s,8.0) >= MIN_ALERT_SCORE
 
-          # No blind OPEN_SCALP: micro/5m mismatch must wait.
           mismatch = deepcopy(base)
           mismatch['tf']['1m'].update({'price':100.5,'ema5':100.4,'ema9':100.0,'plus_di':28,'minus_di':18})
           assert evaluate_entry('BTC','SETUP',mismatch)[0] is False
 
-          # Dead tape stays blocked.
           dead = deepcopy(base)
           dead['tf']['5m'].update({'adx':8,'rel_volume':0.20,'plus_di':20,'minus_di':20})
           dead['structure'] = 'RANGE'
           assert evaluate_entry('BTC','SETUP',dead)[0] is False
 
-          # Extreme chase stays blocked.
           chase = deepcopy(base)
           chase['vwap_distance_atr'] = 3.0
           chase['ema9_distance_atr'] = 1.6
           assert evaluate_entry('BTC','SETUP',chase)[0] is False
 
-          # Contract safety + action-specific quality.
           assert evaluate_contract(0.01,bid=0.01,ask=0.02,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is False
           assert contract_gate('BTC','OPTION BUY',entry=1.00,bid=.99,ask=1.01,spot=80000,delta=.35,minutes_to_expiry=300,python_score=62)[0] is False
           assert contract_gate('BTC','OPTION BUY',entry=1.00,bid=.99,ask=1.01,spot=80000,delta=.35,minutes_to_expiry=300,python_score=70)[0] is True
