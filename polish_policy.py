@@ -1,54 +1,50 @@
-"""ROBO STAFF first Delta strategy — Fresh V3.4 PULLBACK/RECLAIM research policy.
+"""ROBO STAFF first Delta strategy — Fresh V3.5 LOCAL SCALP FLOW research policy.
 
-The V3.3 OPEN_SCALP path produced low-quality early samples. V3.4 changes the
-entry model instead of simply tightening/loosening the same gates:
-- local 5m trend + 1m confirmation are both required;
-- entries prefer pullback/reclaim, retest confirmation, or controlled trend resume;
-- blind OPEN_SCALP is removed;
-- at least one structural/pivot/cross/15m anchor is required;
-- higher timeframes remain context/veto rather than universal blockers;
-- option BUY requires a higher deterministic score than option SELL;
-- quote/dust/chase/expiry protections remain;
-- SIGNAL ONLY: this module has no execution functions.
+This version replaces the previous pullback/reclaim-only logic with a lighter
+scalping model. 1m + 5m local flow decide direction; 15m/1h are context only and
+are never universal direction blockers. Daily/5m pivots are treated as major
+levels/quality context, not mandatory trend filters. The goal is to collect
+usable scalp samples while keeping quote/dust/expiry/chase protection.
 
-The separate MASTER MIND module is intentionally untouched.
+SIGNAL ONLY: no order placement, modification, cancellation or broker secrets.
+MASTER MIND remains a separate engine with its own cooldown.
 """
 from __future__ import annotations
 
 import math
 
-POLISH_VERSION = "FRESH_V3.4_RECLAIM_2026-09-29"
-MODE_REVISION = "PULLBACK_RECLAIM_SCALP_2026-09-29"
-MIN_ALERT_SCORE = 60
-STRONG_SCORE = 76
-ELITE_SCORE = 90
+POLISH_VERSION = "FRESH_V3.5_LOCAL_SCALP_2026-09-29"
+MODE_REVISION = "LOCAL_1M5M_SCALP_FLOW_2026-09-29"
+MIN_ALERT_SCORE = 50
+STRONG_SCORE = 68
+ELITE_SCORE = 84
 DAILY_RESEARCH_TARGET = 3
 
-SPREAD_CAP_PCT = {"BTC": 3.0, "ETH": 4.0, "GOLD": 5.0}
-DAILY_SIGNAL_CAP = {"BTC": 8, "ETH": 8, "GOLD": 6}
-PREMIUM_SPOT_CAP = {"BTC": 0.0125, "ETH": 0.0125, "GOLD": 0.0150}
+SPREAD_CAP_PCT = {"BTC": 4.0, "ETH": 5.0, "GOLD": 6.0}
+DAILY_SIGNAL_CAP = {"BTC": 12, "ETH": 12, "GOLD": 10}
+PREMIUM_SPOT_CAP = {"BTC": 0.0140, "ETH": 0.0140, "GOLD": 0.0180}
 
-BASE_COOLDOWN_MINUTES = 8
-SUCCESS_COOLDOWN_MINUTES = 5
-FAIL_COOLDOWN_MINUTES = 12
-CONTRACT_COOLDOWN_MINUTES = 10
-CORRELATION_WINDOW_MINUTES = 8
-CORRELATION_THRESHOLD = 0.90
+BASE_COOLDOWN_MINUTES = 5
+SUCCESS_COOLDOWN_MINUTES = 4
+FAIL_COOLDOWN_MINUTES = 8
+CONTRACT_COOLDOWN_MINUTES = 7
+CORRELATION_WINDOW_MINUTES = 6
+CORRELATION_THRESHOLD = 0.92
 
 ACCEPTANCE_CRITERIA = {
     "min_resolved": 50,
     "preferred_resolved": 75,
     "min_calendar_days": 3,
-    "min_t1_success_pct": 42.0,
-    "min_profit_factor": 1.20,
-    "min_expectancy_r": 0.10,
+    "min_t1_success_pct": 40.0,
+    "min_profit_factor": 1.15,
+    "min_expectancy_r": 0.08,
     "max_median_t1_minutes": 25.0,
     "max_p75_t1_minutes": 40.0,
-    "max_fast_sl_pct": 30.0,
-    "max_sl_later_t1_pct": 20.0,
-    "max_stale_pct": 20.0,
+    "max_fast_sl_pct": 35.0,
+    "max_sl_later_t1_pct": 22.0,
+    "max_stale_pct": 22.0,
     "bucket_min_n": 12,
-    "bucket_min_win_pct": 35.0,
+    "bucket_min_win_pct": 34.0,
     "bucket_min_pf": 0.95,
 }
 
@@ -63,46 +59,38 @@ def _f(v, default=0.0):
 
 def _di_ratio(direction: str, state: dict) -> float:
     pdi, mdi = _f(state.get('plus_di')), _f(state.get('minus_di'))
-    return pdi / max(mdi, 1.0) if direction == 'BULLISH' else mdi / max(pdi, 1.0)
-
-
-def _trend5(direction: str, s5: dict) -> bool:
-    px, e5, e9, e20, vw = (_f(s5.get(k)) for k in ('price','ema5','ema9','ema20','vwap'))
-    pdi, mdi = _f(s5.get('plus_di')), _f(s5.get('minus_di'))
     if direction == 'BULLISH':
-        return px >= e9 and e5 >= e9 and e9 >= e20 and pdi >= mdi and px >= vw * 0.998
-    if direction == 'BEARISH':
-        return px <= e9 and e5 <= e9 and e9 <= e20 and mdi >= pdi and px <= vw * 1.002
-    return False
+        return pdi / max(mdi, 1.0)
+    return mdi / max(pdi, 1.0)
 
 
-def _micro1(direction: str, s1: dict) -> bool:
-    px, e5, e9 = (_f(s1.get(k)) for k in ('price','ema5','ema9'))
-    pdi, mdi, adx = _f(s1.get('plus_di')), _f(s1.get('minus_di')), _f(s1.get('adx'))
+def _votes(direction: str, state: dict) -> int:
+    px, e5, e9, vw = (_f(state.get(k)) for k in ('price','ema5','ema9','vwap'))
+    pdi, mdi = _f(state.get('plus_di')), _f(state.get('minus_di'))
     if direction == 'BULLISH':
-        return px >= e9 and e5 >= e9 and pdi >= mdi and adx >= 5
+        return sum((px >= e9, e5 >= e9, pdi >= mdi, px >= vw * 0.9995))
     if direction == 'BEARISH':
-        return px <= e9 and e5 <= e9 and mdi >= pdi and adx >= 5
-    return False
+        return sum((px <= e9, e5 <= e9, mdi >= pdi, px <= vw * 1.0005))
+    return 0
+
+
+def _micro_votes(direction: str, state: dict) -> int:
+    px, e5, e9 = (_f(state.get(k)) for k in ('price','ema5','ema9'))
+    pdi, mdi = _f(state.get('plus_di')), _f(state.get('minus_di'))
+    if direction == 'BULLISH':
+        return sum((px >= e9, e5 >= e9, pdi >= mdi))
+    if direction == 'BEARISH':
+        return sum((px <= e9, e5 <= e9, mdi >= pdi))
+    return 0
 
 
 def _tf_soft(direction: str, state: dict) -> bool:
     px, e9, vw = _f(state.get('price')), _f(state.get('ema9')), _f(state.get('vwap'))
     pdi, mdi = _f(state.get('plus_di')), _f(state.get('minus_di'))
     if direction == 'BULLISH':
-        return px >= e9 and (px >= vw or pdi >= mdi)
+        return px >= e9 or px >= vw or pdi >= mdi
     if direction == 'BEARISH':
-        return px <= e9 and (px <= vw or mdi >= pdi)
-    return False
-
-
-def _tf_strong_opposite(direction: str, state: dict) -> bool:
-    px, e5, e9, e20 = (_f(state.get(k)) for k in ('price','ema5','ema9','ema20'))
-    pdi, mdi, adx = _f(state.get('plus_di')), _f(state.get('minus_di')), _f(state.get('adx'))
-    if direction == 'BULLISH':
-        return px < e5 < e9 < e20 and mdi > pdi * 1.20 and adx >= 24
-    if direction == 'BEARISH':
-        return px > e5 > e9 > e20 and pdi > mdi * 1.20 and adx >= 24
+        return px <= e9 or px <= vw or mdi >= pdi
     return False
 
 
@@ -129,106 +117,91 @@ def _rewrite_setup_id(snap: dict, direction: str, pattern: str):
         snap['setup_id'] = f"{snap.get('symbol','UNK')}:{direction}:{pattern}:{sid}"
 
 
-def _infer_direction(snap: dict):
+def _infer_local_direction(snap: dict):
     tf = snap.get('tf') or {}
-    s1 = tf.get('1m') or {}; s5 = tf.get('5m') or {}; s15 = tf.get('15m') or {}
+    s1, s5 = tf.get('1m') or {}, tf.get('5m') or {}
+    scored = []
     for d in ('BULLISH','BEARISH'):
-        if _trend5(d, s5) and _micro1(d, s1):
-            return d, '5m trend + 1m reclaim confirmation'
-    for d in ('BULLISH','BEARISH'):
-        if _trend5(d, s5) and _tf_soft(d, s15):
-            return d, '5m trend + 15m context; awaiting 1m confirmation'
-    return None, 'no coherent 5m trend'
+        v5, v1 = _votes(d, s5), _micro_votes(d, s1)
+        scored.append((v5 * 2 + v1, v5, v1, d))
+    scored.sort(reverse=True)
+    total, v5, v1, direction = scored[0]
+    other = scored[1]
+    if v5 >= 3 and v1 >= 2 and total > other[0]:
+        return direction, f'local 5m/1m flow {v5}/4 + {v1}/3'
+    if v5 == 4 and v1 >= 1 and total >= other[0] + 2:
+        return direction, f'strong 5m flow {v5}/4; early 1m confirmation {v1}/3'
+    return None, f'local flow unresolved best={direction} 5m={v5}/4 1m={v1}/3'
 
 
 def evaluate_entry(underlying: str, action: str, snap: dict):
-    """V3.4 entry gate: pullback/reclaim first, no blind OPEN_SCALP."""
+    """Local scalp gate: 1m/5m choose direction, higher TFs only add context."""
     underlying = str(underlying or '').upper()
     tf = snap.get('tf') or {}
-    s1 = tf.get('1m') or {}; s5 = tf.get('5m') or {}; s15 = tf.get('15m') or {}; s1h = tf.get('1h') or {}
+    s1, s5 = tf.get('1m') or {}, tf.get('5m') or {}
+    s15, s1h = tf.get('15m') or {}, tf.get('1h') or {}
 
-    direction = str(snap.get('direction') or '').upper()
-    if direction not in {'BULLISH','BEARISH'} or not _trend5(direction, s5):
-        inferred, reason = _infer_direction(snap)
-        if not inferred:
-            return False, f'V3.4 no trend: {reason}'
-        direction = inferred
-        snap['direction'] = direction
-        snap['bias_reason'] = reason
+    direction, why = _infer_local_direction(snap)
+    if not direction:
+        return False, f'V3.5 wait: {why}'
+    snap['direction'] = direction
+    snap['bias_reason'] = why
 
-    local5 = _trend5(direction, s5)
-    micro = _micro1(direction, s1)
-    if not local5:
-        return False, 'V3.4 5m trend alignment failed'
-    if not micro:
-        return False, 'V3.4 waiting for 1m reclaim/continuation confirmation'
-
+    v5, v1 = _votes(direction, s5), _micro_votes(direction, s1)
     adx = _f(s5.get('adx'))
     rvol = _f(s5.get('rel_volume'))
     ratio = _di_ratio(direction, s5)
     structure = str(snap.get('structure') or '')
     structure_ok = _structure_ok(direction, structure)
-    daily_zone = str(snap.get('daily_zone') or '')
-    five_zone = str(snap.get('five_zone') or '')
-    pivot5 = _pivot_supports(direction, five_zone)
-    pivotd = _pivot_supports(direction, daily_zone)
 
-    if adx < 11 and rvol < 0.30:
-        return False, f'V3.4 dead tape ADX/RVOL {adx:.1f}/{rvol:.2f}'
-    if ratio < 1.05 and not structure_ok:
-        return False, f'V3.4 DI edge too weak {ratio:.2f}'
+    # Only truly dead tape is rejected. ADX/RVOL are quality inputs otherwise.
+    if adx < 7 and rvol < 0.18 and not structure_ok:
+        return False, f'V3.5 dead tape ADX/RVOL {adx:.1f}/{rvol:.2f}'
 
     vwap_atr = _f(snap.get('vwap_distance_atr'))
     ema9_atr = _f(snap.get('ema9_distance_atr'))
     breakout_ext = _f(snap.get('breakout_extension_atr'))
-    if vwap_atr > 2.50 or ema9_atr > 1.35:
-        return False, f'V3.4 chase reject VWAP/EMA9 {vwap_atr:.2f}/{ema9_atr:.2f} ATR'
+    if vwap_atr > 3.50 or ema9_atr > 2.00:
+        return False, f'V3.5 extreme chase VWAP/EMA9 {vwap_atr:.2f}/{ema9_atr:.2f} ATR'
 
-    both_opposite = _tf_strong_opposite(direction, s15) and _tf_strong_opposite(direction, s1h)
-    if both_opposite and not (adx >= 22 and ratio >= 1.20 and rvol >= 0.65):
-        return False, 'V3.4 both 15m/1h strongly opposite'
-
-    rsi5, wr5 = _f(s5.get('rsi')), _f(s5.get('williams_r'))
-    if direction == 'BULLISH' and (rsi5 > 88 or wr5 > -1):
-        return False, 'V3.4 bullish exhaustion'
-    if direction == 'BEARISH' and (rsi5 < 12 or wr5 < -99):
-        return False, 'V3.4 bearish exhaustion'
+    daily_zone = str(snap.get('daily_zone') or '')
+    five_zone = str(snap.get('five_zone') or '')
+    pivot5 = _pivot_supports(direction, five_zone)
+    pivotd = _pivot_supports(direction, daily_zone)
+    htf15 = _tf_soft(direction, s15)
+    htf1h = _tf_soft(direction, s1h)
 
     cross = snap.get('ema_cross_5m') or {}
     cross_ok = str(cross.get('side') or '').upper() == direction and cross.get('bars_ago') in (0,1)
     old_pattern = str(snap.get('pattern') or '').upper()
-    htf15 = _tf_soft(direction, s15)
-    anchor_count = sum(bool(x) for x in (structure_ok, pivot5, pivotd, cross_ok, htf15))
-    if anchor_count < 1:
-        return False, 'V3.4 no structural/pivot/HTF anchor'
 
-    # Pattern priority deliberately favors entries after a controlled pullback.
-    if ema9_atr <= 0.65:
-        pattern = 'PULLBACK_RECLAIM'
-    elif old_pattern == 'RETEST' and cross_ok:
-        pattern = 'RETEST_CONFIRM'
-    elif old_pattern == 'BREAKOUT' and cross_ok and breakout_ext <= 0.75:
-        pattern = 'BREAKOUT_CONFIRM'
-    elif adx >= 15 and ratio >= 1.10 and rvol >= 0.40 and ema9_atr <= 1.00:
-        pattern = 'TREND_RESUME'
+    # Pattern selection intentionally favors frequency; pivots/HTF only label quality.
+    if ema9_atr <= 0.70:
+        pattern = 'PULLBACK_SCALP'
+    elif old_pattern in {'BREAKOUT','RETEST'} and cross_ok and breakout_ext <= 1.20:
+        pattern = 'BREAKOUT_SCALP' if old_pattern == 'BREAKOUT' else 'RETEST_SCALP'
+    elif adx >= 12 or rvol >= 0.35 or ratio >= 1.05:
+        pattern = 'MOMENTUM_SCALP'
     else:
-        return False, (
-            f'V3.4 wait for pullback/retest (EMA9 {ema9_atr:.2f}ATR, '
-            f'ADX {adx:.1f}, DI {ratio:.2f}, RVOL {rvol:.2f})'
-        )
+        pattern = 'EARLY_SCALP'
 
     snap['pattern'] = pattern
     snap['scalp_mode'] = True
-    snap['momentum_mode'] = pattern in {'BREAKOUT_CONFIRM','TREND_RESUME'}
+    snap['momentum_mode'] = pattern in {'MOMENTUM_SCALP','BREAKOUT_SCALP'}
     snap['structure_relaxed'] = not structure_ok
-    snap['one_min_trigger'] = True
-    snap['one_min_ema_hold'] = True
-    snap['micro_trigger'] = True
-    snap['price_ema_aligned'] = True
-    snap['reclaim_mode'] = pattern in {'PULLBACK_RECLAIM','RETEST_CONFIRM'}
-    snap['anchor_count'] = anchor_count
+    snap['one_min_trigger'] = v1 >= 2
+    snap['one_min_ema_hold'] = v1 >= 2
+    snap['micro_trigger'] = v1 >= 2
+    snap['price_ema_aligned'] = v5 >= 3
+    snap['local_5m_votes'] = v5
+    snap['local_1m_votes'] = v1
+    snap['htf15_context'] = htf15
+    snap['htf1h_context'] = htf1h
+    snap['pivot5_context'] = pivot5
+    snap['pivotd_context'] = pivotd
+    snap['major_level_context_only'] = True
     _rewrite_setup_id(snap, direction, pattern)
-    return True, 'V3.4_PULLBACK_RECLAIM_PASS'
+    return True, 'V3.5_LOCAL_SCALP_PASS'
 
 
 def contract_gate(underlying: str, action: str, *, entry, bid, ask, spot=None, delta=None,
@@ -243,42 +216,38 @@ def contract_gate(underlying: str, action: str, *, entry, bid, ask, spot=None, d
     mid = (a + b) / 2.0
     spread = a - b
     spread_pct = spread / mid * 100.0 if mid > 0 else 999.0
-    cap = SPREAD_CAP_PCT.get(underlying, 4.0)
-    if spread_pct > cap + 1e-9:
+    cap = SPREAD_CAP_PCT.get(underlying, 5.0)
+    if spread_pct > cap:
         return False, f'spread>{cap:.1f}%', {'spread_pct': spread_pct}
-    if action == 'OPTION BUY' and spread_pct > min(cap, 3.5):
-        return False, 'OPTION BUY spread too wide for scalp', {'spread_pct': spread_pct}
 
-    min_premium = max(0.08, 6.0 * tick, 2.5 * spread)
+    min_premium = max(0.06, 4.0 * tick, 2.0 * spread)
     if p < min_premium:
         return False, f'premium<{min_premium:.4g} execution floor', {'spread_pct': spread_pct, 'min_premium': min_premium}
 
     s = _f(spot, 0)
-    if s > 0 and p / s > PREMIUM_SPOT_CAP.get(underlying, 0.0125):
-        return False, 'premium/spot above V3.4 cap', {'spread_pct': spread_pct}
+    if s > 0 and p / s > PREMIUM_SPOT_CAP.get(underlying, 0.014):
+        return False, 'premium/spot above V3.5 cap', {'spread_pct': spread_pct}
 
     d = None if delta is None else abs(_f(delta, -1))
     if d is not None and d >= 0:
-        if d < 0.08:
-            return False, 'lottery delta<0.08', {'spread_pct': spread_pct, 'abs_delta': d}
-        lo, hi = ((0.18, 0.55) if action == 'OPTION BUY' else (0.10, 0.45))
+        if d < 0.05:
+            return False, 'lottery delta<0.05', {'spread_pct': spread_pct, 'abs_delta': d}
+        lo, hi = ((0.12, 0.65) if action == 'OPTION BUY' else (0.08, 0.50))
         if not (lo <= d <= hi):
-            return False, f'delta outside V3.4 {lo:.2f}-{hi:.2f}', {'spread_pct': spread_pct, 'abs_delta': d}
+            return False, f'delta outside V3.5 {lo:.2f}-{hi:.2f}', {'spread_pct': spread_pct, 'abs_delta': d}
 
     score = _f(python_score, 100)
-    # The engine first probes with score=100, then re-checks with the real score.
-    # On the second pass, option buying needs stronger setup quality than selling.
-    if action == 'OPTION BUY' and score < 66:
-        return False, 'OPTION BUY requires Python score>=66', {'spread_pct': spread_pct}
-    if action == 'OPTION SELL' and score < 58:
-        return False, 'OPTION SELL requires Python score>=58', {'spread_pct': spread_pct}
+    if action == 'OPTION BUY' and score < 52:
+        return False, 'OPTION BUY requires Python score>=52', {'spread_pct': spread_pct}
+    if action == 'OPTION SELL' and score < 48:
+        return False, 'OPTION SELL requires Python score>=48', {'spread_pct': spread_pct}
 
     if minutes_to_expiry is not None:
         mte = _f(minutes_to_expiry, -1)
-        if 0 <= mte < 60:
-            return False, 'expiry<60m', {'spread_pct': spread_pct, 'minutes_to_expiry': mte}
-        if 60 <= mte < 120 and (score < 72 or spread_pct > 3.0):
-            return False, 'near-expiry needs score>=72 and spread<=3%', {'spread_pct': spread_pct, 'minutes_to_expiry': mte}
+        if 0 <= mte < 45:
+            return False, 'expiry<45m', {'spread_pct': spread_pct, 'minutes_to_expiry': mte}
+        if 45 <= mte < 90 and (score < 60 or spread_pct > 4.5):
+            return False, 'near-expiry needs score>=60 and spread<=4.5%', {'spread_pct': spread_pct, 'minutes_to_expiry': mte}
 
     return True, 'CONTRACT_GATE_PASS', {
         'spread_pct': spread_pct, 'spread_abs': spread, 'min_premium': min_premium,
@@ -299,60 +268,71 @@ def evaluate_contract(premium, *, tick_size=None, bid=None, ask=None, underlying
 def quality_score(underlying: str, snap: dict, contract_score: float = 0.0) -> int:
     direction = str(snap.get('direction') or '').upper()
     tf = snap.get('tf') or {}
-    s1 = tf.get('1m') or {}; s5 = tf.get('5m') or {}; s15 = tf.get('15m') or {}; s1h = tf.get('1h') or {}
-    score = 0.0
+    s1, s5 = tf.get('1m') or {}, tf.get('5m') or {}
+    s15, s1h = tf.get('15m') or {}, tf.get('1h') or {}
+    v5, v1 = _votes(direction, s5), _micro_votes(direction, s1)
+    score = v5 * 6.0 + v1 * 6.0
 
-    if _trend5(direction, s5): score += 20
-    if _micro1(direction, s1): score += 16
-    if _tf_soft(direction, s15): score += 9
-    if _tf_soft(direction, s1h): score += 6
-    if _structure_ok(direction, str(snap.get('structure') or '')): score += 7
-    elif snap.get('structure_relaxed'): score += 2
+    if _structure_ok(direction, str(snap.get('structure') or '')):
+        score += 8
+    else:
+        score += 3
 
-    adx, rvol, ratio = _f(s5.get('adx')), _f(s5.get('rel_volume')), _di_ratio(direction, s5)
-    score += 8 if adx >= 24 else (6 if adx >= 18 else (3 if adx >= 11 else 0))
-    score += 6 if ratio >= 1.30 else (4 if ratio >= 1.12 else (2 if ratio >= 1.05 else 0))
-    score += 6 if rvol >= 1.20 else (4 if rvol >= 0.70 else (2 if rvol >= 0.30 else 0))
+    adx, ratio, rvol = _f(s5.get('adx')), _di_ratio(direction, s5), _f(s5.get('rel_volume'))
+    score += 8 if adx >= 24 else (6 if adx >= 16 else (3 if adx >= 9 else 0))
+    score += 7 if ratio >= 1.25 else (5 if ratio >= 1.08 else (2 if ratio >= 0.98 else 0))
+    score += 7 if rvol >= 1.25 else (5 if rvol >= 0.75 else (2 if rvol >= 0.30 else 0))
 
-    if _pivot_supports(direction, str(snap.get('five_zone') or '')): score += 4
-    if _pivot_supports(direction, str(snap.get('daily_zone') or '')): score += 3
+    if _pivot_supports(direction, str(snap.get('five_zone') or '')):
+        score += 4
+    if _pivot_supports(direction, str(snap.get('daily_zone') or '')):
+        score += 2
+    if _tf_soft(direction, s15):
+        score += 3
+    if _tf_soft(direction, s1h):
+        score += 2
 
-    ema9_atr = _f(snap.get('ema9_distance_atr'))
-    vwap_atr = _f(snap.get('vwap_distance_atr'))
-    if ema9_atr <= 0.65: score += 6
-    elif ema9_atr <= 1.0: score += 3
-    if vwap_atr <= 1.5: score += 4
-    elif vwap_atr <= 2.2: score += 2
+    vwap_atr, ema9_atr = _f(snap.get('vwap_distance_atr')), _f(snap.get('ema9_distance_atr'))
+    if vwap_atr <= 1.5:
+        score += 4
+    elif vwap_atr <= 2.5:
+        score += 2
+    if ema9_atr <= 0.8:
+        score += 4
+    elif ema9_atr <= 1.4:
+        score += 2
 
     pattern = str(snap.get('pattern') or '')
-    if pattern == 'PULLBACK_RECLAIM': score += 10
-    elif pattern == 'RETEST_CONFIRM': score += 9
-    elif pattern == 'BREAKOUT_CONFIRM': score += 7
-    elif pattern == 'TREND_RESUME': score += 5
-
-    rsi5, wr5 = _f(s5.get('rsi')), _f(s5.get('williams_r'))
-    if direction == 'BULLISH':
-        if 38 <= rsi5 <= 78: score += 3
-        if -92 <= wr5 <= -5: score += 2
-    elif direction == 'BEARISH':
-        if 22 <= rsi5 <= 62: score += 3
-        if -96 <= wr5 <= -8: score += 2
+    if pattern == 'PULLBACK_SCALP':
+        score += 6
+    elif pattern in {'RETEST_SCALP','BREAKOUT_SCALP'}:
+        score += 5
+    elif pattern == 'MOMENTUM_SCALP':
+        score += 4
+    elif pattern == 'EARLY_SCALP':
+        score += 2
 
     score += max(0.0, min(10.0, _f(contract_score)))
     return int(round(max(0.0, min(100.0, score))))
 
 
 def quality_label(score: int) -> str:
-    if score >= ELITE_SCORE: return 'ELITE'
-    if score >= STRONG_SCORE: return 'STRONG'
-    if score >= MIN_ALERT_SCORE: return 'VALID'
+    if score >= ELITE_SCORE:
+        return 'ELITE'
+    if score >= STRONG_SCORE:
+        return 'STRONG'
+    if score >= MIN_ALERT_SCORE:
+        return 'VALID'
     return 'NO TRADE'
 
 
 def ai_adjustment(decision: str, confidence: int) -> int:
     d = str(decision or '').upper()
     c = int(max(0, min(100, confidence or 0)))
-    if d == 'CONFIRM' and c >= 80: return 3
-    if d == 'WAIT': return -2
-    if d == 'REJECT': return -5 if c >= 90 else -3
+    if d == 'CONFIRM' and c >= 80:
+        return 3
+    if d == 'WAIT':
+        return -2
+    if d == 'REJECT':
+        return -5 if c >= 90 else -3
     return 0
