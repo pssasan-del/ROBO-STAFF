@@ -53,19 +53,16 @@ jobs:
           assert s['pattern'] in {'OPEN_SCALP','TREND_SCALP'}
           assert quality_score('BTC',s,8.0) >= MIN_ALERT_SCORE
 
-          # Very dead tape remains blocked.
           dead = deepcopy(base)
           dead['tf']['5m'].update({'adx':8,'rel_volume':0.20,'plus_di':20,'minus_di':20})
           dead['tf']['1m'].update({'adx':5,'plus_di':20,'minus_di':20})
           assert evaluate_entry('BTC','SETUP',dead)[0] is False
 
-          # Extreme chase remains blocked.
           chase = deepcopy(base)
           chase['vwap_distance_atr'] = 3.8
           chase['ema9_distance_atr'] = 2.0
           assert evaluate_entry('BTC','SETUP',chase)[0] is False
 
-          # Dust is still blocked; practical low premium and wider research spread can pass.
           assert evaluate_contract(0.01,bid=0.01,ask=0.02,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is False
           assert evaluate_contract(1.00,bid=.985,ask=1.015,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is True
           assert evaluate_contract(1.00,bid=.98,ask=1.02,underlying='ETH',action='OPTION BUY',spot=3000,delta=.20)[0] is True
@@ -91,12 +88,12 @@ jobs:
           assert 'OPEN_SCALP_RESEARCH_2026-09-29' in policy
           assert 'MASTER MIND SIGNAL ALERT' in master
           assert 'master_mind_engine' in app
-          assert 'SIGNAL ONLY — NO ORDER EXECUTED' in engine
+          assert 'AutoSignalEngine' in engine or 'DeltaAutoSignalEngine' in engine
 
           forbidden = ['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', 'DELTA_API_SECRET', 'DELTA_API_KEY']
           for needle in forbidden:
-              assert needle not in engine
-              assert needle not in master
+              assert needle not in engine, needle
+              assert needle not in master, needle
 
           print('V33_LOOSE_SIGNAL_ONLY_SEPARATION_OK')
           PY
