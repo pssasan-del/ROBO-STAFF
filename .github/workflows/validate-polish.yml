@@ -87,8 +87,8 @@ jobs:
           assert 'FRESH_V3.3_LOOSE_2026-09-29' in policy
           assert 'OPEN_SCALP_RESEARCH_2026-09-29' in policy
           assert 'MASTER MIND SIGNAL ALERT' in master
-          assert 'master_mind_engine' in app
-          assert 'AutoSignalEngine' in engine or 'DeltaAutoSignalEngine' in engine
+          assert 'master_mind_scalp_engine' in app
+          assert 'DeltaAutoSignalEngine' in engine
 
           forbidden = ['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', 'DELTA_API_SECRET', 'DELTA_API_KEY']
           for needle in forbidden:
