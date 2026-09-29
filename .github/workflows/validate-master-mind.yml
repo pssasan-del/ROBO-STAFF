@@ -1,4 +1,4 @@
-name: Validate Master Mind BTC 5m Scalp
+name: Validate Master Mind BTC NIFTY-Style Scalp
 
 on:
   pull_request:
@@ -18,45 +18,39 @@ jobs:
         run: |
           python -m py_compile master_mind_scalp.py app.py delta_signal_engine.py polish_policy.py
 
-      - name: Validate isolation, locked stack and simple alert
+      - name: Validate isolation and NIFTY-style confirmation stack
         run: |
           python - <<'PY'
           from pathlib import Path
+          mm=Path('master_mind_scalp.py').read_text()
+          app=Path('app.py').read_text()
 
-          mm = Path('master_mind_scalp.py').read_text()
-          app = Path('app.py').read_text()
-
-          required = [
+          required=[
               'MASTER MIND SIGNAL ALERT',
-              'MASTER_MIND_BTC_5M_V2_SIMPLE_2026-09-29',
-              '_mcginley(',
-              '_momentum(closes,10)',
-              '_ema(closes,9)',
-              '_ema(closes,95)',
-              'fibonacci_pivots',
-              'Volume',
-              'Breakout',
-              'Pullback',
-              'Exhaustion Reversal',
-              'SELL OTM PUT',
-              'SELL OTM CALL',
-              'Confirmations:',
-              '⭐ Score:',
-              'SIGNAL ONLY',
+              'MASTER_MIND_BTC_MTF_NIFTY_V3_2026-09-29',
+              "get_candles(MASTER_MIND_SYMBOL,'1m'",
+              "get_candles(MASTER_MIND_SYMBOL,'5m'",
+              "get_candles(MASTER_MIND_SYMBOL,'15m'",
+              '_ema(c1,9)','_ema(c1,21)','_ema(c5,9)','_ema(c5,21)','_ema(c15,9)','_ema(c15,21)',
+              '_williams(r5,14)','_cpr(days[-1])','fibonacci_pivots(days[-1])',
+              '15M higher-timeframe price action','15M EMA 9/21 bullish confirmation','15M EMA 9/21 bearish confirmation',
+              '5M EMA 9/21 bullish','5M EMA 9/21 bearish','1M EMA 9/21 bullish','1M EMA 9/21 bearish',
+              'Williams %R bullish','Williams %R bearish','Above daily CPR','Below daily CPR',
+              'Above daily Fib R1','Below daily Fib S1','Option liquidity:','Confirmations:','SIGNAL ONLY'
           ]
-          for needle in required:
-              assert needle in mm, needle
+          for needle in required:assert needle in mm,needle
 
-          assert 'Version:' not in mm
+          # Old EMA95/McGinley/Momentum-only Master Mind logic was intentionally replaced.
+          assert '_mcginley(' not in mm
+          assert '_momentum(' not in mm
+          assert '_ema(c5,95)' not in mm
+
           assert 'master_mind_scalp_engine.loop()' in app
           assert 'master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)' in app
           for forbidden in [
-              'performance_store', 'research_store', 'BASE_COOLDOWN_MINUTES',
-              'FAIL_COOLDOWN_MINUTES', 'SUCCESS_COOLDOWN_MINUTES',
-              'place_order(', 'modify_order(', 'cancel_order(', 'square_off(',
-              'DELTA_API_KEY', 'DELTA_API_SECRET'
+              'performance_store','research_store','BASE_COOLDOWN_MINUTES','FAIL_COOLDOWN_MINUTES','SUCCESS_COOLDOWN_MINUTES',
+              'place_order(','modify_order(','cancel_order(','square_off(','DELTA_API_KEY','DELTA_API_SECRET'
           ]:
-              assert forbidden not in mm, forbidden
-
-          print('MASTER_MIND_V2_SIMPLE_ISOLATION_AND_STACK_OK')
+              assert forbidden not in mm,forbidden
+          print('MASTER_MIND_NIFTY_STYLE_ISOLATION_OK')
           PY
