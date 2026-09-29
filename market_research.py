@@ -11,15 +11,15 @@ from strategy_engine import ema, atr, vwap, directional_values
 from polish_policy import ACCEPTANCE_CRITERIA
 
 IST = timezone(timedelta(hours=5, minutes=30))
-RESEARCH_EPOCH = 'FRESH_V3.5_LOCAL_SCALP_2026-09-29'
-RESEARCH_TABLE = 'delta_research_signals_v35'
+RESEARCH_EPOCH = 'FRESH_V3.6_ULTRA_SCALP_2026-09-29'
+RESEARCH_TABLE = 'delta_research_signals_v36'
 
 
 class ResearchStore:
-    """Bounded V3.5 telemetry. Research observes; it never edits live rules."""
+    """Bounded V3.6 telemetry. Research observes only; it never edits live rules."""
     def __init__(self):
         self.lock = threading.RLock()
-        self.rows = deque(maxlen=300)
+        self.rows = deque(maxlen=400)
         self.pg = False
         self.conn = None
         try:
@@ -39,7 +39,7 @@ class ResearchStore:
                         mfe_pct DOUBLE PRECISION DEFAULT 0, mae_pct DOUBLE PRECISION DEFAULT 0,
                         mfe_r DOUBLE PRECISION DEFAULT 0, mae_r DOUBLE PRECISION DEFAULT 0,
                         updated_at TEXT NOT NULL)''')
-                logger.info('[RESEARCH] Fresh V3.5 PostgreSQL telemetry enabled; older epochs excluded')
+                logger.info('[RESEARCH] Fresh V3.6 PostgreSQL telemetry enabled; older epochs excluded')
         except Exception as exc:
             logger.warning('[RESEARCH] PostgreSQL unavailable; bounded RAM fallback: %s', exc)
             self.pg = False
@@ -70,7 +70,7 @@ class ResearchStore:
                     candidate.premium,candidate.sl,candidate.t1,candidate.score,candidate.ai_status,
                     json.dumps(features,separators=(',',':')),outcome,datetime.now(timezone.utc).isoformat()))
                 cur.execute(f'''DELETE FROM {RESEARCH_TABLE} WHERE signal_key IN
-                    (SELECT signal_key FROM {RESEARCH_TABLE} ORDER BY created_at DESC OFFSET 1000)''')
+                    (SELECT signal_key FROM {RESEARCH_TABLE} ORDER BY created_at DESC OFFSET 1200)''')
         else:
             self.rows.append(row)
 
@@ -79,25 +79,23 @@ class ResearchStore:
             self._insert(key, candidate, features, 'OPEN')
 
     def add_suppressed(self, key, candidate, features, reason):
-        f = dict(features or {})
-        f['suppression_reason'] = reason
+        f = dict(features or {}); f['suppression_reason'] = reason
         with self.lock:
             self._insert('SUPPRESSED:' + key, candidate, f, 'SUPPRESSED')
 
     def update_excursion(self, key, mfe_pct, mae_pct, mfe_r=0.0, mae_r=0.0):
-        vals = [max(0.0, float(x or 0)) for x in (mfe_pct, mae_pct, mfe_r, mae_r)]
+        vals=[max(0.0,float(x or 0)) for x in (mfe_pct,mae_pct,mfe_r,mae_r)]
         with self.lock:
             if self.pg:
                 with self.conn.cursor() as cur:
                     cur.execute(f'''UPDATE {RESEARCH_TABLE} SET
                         mfe_pct=GREATEST(COALESCE(mfe_pct,0),%s),mae_pct=GREATEST(COALESCE(mae_pct,0),%s),
                         mfe_r=GREATEST(COALESCE(mfe_r,0),%s),mae_r=GREATEST(COALESCE(mae_r,0),%s),updated_at=%s
-                        WHERE signal_key=%s''', (*vals, datetime.now(timezone.utc).isoformat(), key))
+                        WHERE signal_key=%s''',(*vals,datetime.now(timezone.utc).isoformat(),key))
             else:
                 for r in reversed(self.rows):
-                    if r['signal_key'] == key:
-                        r['mfe_pct']=max(r['mfe_pct'],vals[0]); r['mae_pct']=max(r['mae_pct'],vals[1])
-                        r['mfe_r']=max(r['mfe_r'],vals[2]); r['mae_r']=max(r['mae_r'],vals[3]); break
+                    if r['signal_key']==key:
+                        r['mfe_pct']=max(r['mfe_pct'],vals[0]);r['mae_pct']=max(r['mae_pct'],vals[1]);r['mfe_r']=max(r['mfe_r'],vals[2]);r['mae_r']=max(r['mae_r'],vals[3]);break
 
     def resolve(self, key, outcome, seconds, price, outcome_r=0.0):
         with self.lock:
@@ -108,20 +106,18 @@ class ResearchStore:
                         (outcome,float(seconds),float(price),float(outcome_r),datetime.now(timezone.utc).isoformat(),key))
             else:
                 for r in reversed(self.rows):
-                    if r['signal_key'] == key:
-                        r.update(outcome=outcome,outcome_seconds=float(seconds),outcome_price=float(price),outcome_r=float(outcome_r)); break
+                    if r['signal_key']==key:
+                        r.update(outcome=outcome,outcome_seconds=float(seconds),outcome_price=float(price),outcome_r=float(outcome_r));break
 
     def mark_recovery(self, key, target='t1'):
-        col = 'sl_later_t2' if str(target).lower() == 't2' else 'sl_later_t1'
+        col='sl_later_t2' if str(target).lower()=='t2' else 'sl_later_t1'
         with self.lock:
             if self.pg:
                 with self.conn.cursor() as cur:
-                    cur.execute(f'UPDATE {RESEARCH_TABLE} SET {col}=TRUE,updated_at=%s WHERE signal_key=%s',
-                                (datetime.now(timezone.utc).isoformat(),key))
+                    cur.execute(f'UPDATE {RESEARCH_TABLE} SET {col}=TRUE,updated_at=%s WHERE signal_key=%s',(datetime.now(timezone.utc).isoformat(),key))
             else:
                 for r in reversed(self.rows):
-                    if r['signal_key'] == key:
-                        r[col] = True; break
+                    if r['signal_key']==key:r[col]=True;break
 
     def _records(self):
         records=[]
@@ -131,145 +127,119 @@ class ResearchStore:
                     sl_later_t1,sl_later_t2,mfe_pct,mae_pct,mfe_r,mae_r FROM {RESEARCH_TABLE} ORDER BY created_at DESC''')
                 for row in cur.fetchall():
                     created,und,action,direction,outcome,seconds,out_r,features_json,r1,r2,mfe,mae,mfer,maer=row
-                    try: features=json.loads(features_json or '{}')
-                    except Exception: features={}
+                    try:features=json.loads(features_json or '{}')
+                    except Exception:features={}
                     records.append({'created_at':float(created),'underlying':und,'action':action,'direction':direction,
                         'outcome':outcome,'seconds':float(seconds or 0),'outcome_r':float(out_r or 0),'features':features,
-                        'recovered':bool(r1),'recovered_t2':bool(r2),'mfe_pct':float(mfe or 0),'mae_pct':float(mae or 0),
-                        'mfe_r':float(mfer or 0),'mae_r':float(maer or 0)})
+                        'recovered':bool(r1),'recovered_t2':bool(r2),'mfe_r':float(mfer or 0),'mae_r':float(maer or 0)})
         else:
             for r in self.rows:
                 records.append({'created_at':float(r.get('created_at') or 0),'underlying':r.get('underlying'),'action':r.get('action'),
                     'direction':r.get('direction'),'outcome':r.get('outcome'),'seconds':float(r.get('outcome_seconds') or 0),
-                    'outcome_r':float(r.get('outcome_r') or 0),'features':r.get('features') or {},
-                    'recovered':bool(r.get('sl_later_t1')),'recovered_t2':bool(r.get('sl_later_t2')),
-                    'mfe_pct':float(r.get('mfe_pct') or 0),'mae_pct':float(r.get('mae_pct') or 0),
-                    'mfe_r':float(r.get('mfe_r') or 0),'mae_r':float(r.get('mae_r') or 0)})
+                    'outcome_r':float(r.get('outcome_r') or 0),'features':r.get('features') or {},'recovered':bool(r.get('sl_later_t1')),
+                    'recovered_t2':bool(r.get('sl_later_t2')),'mfe_r':float(r.get('mfe_r') or 0),'mae_r':float(r.get('mae_r') or 0)})
         return records
 
     @staticmethod
-    def _pf(rs):
-        pos=sum(x for x in rs if x>0); neg=abs(sum(x for x in rs if x<0))
-        return round(pos/neg,2) if neg>0 else (99.0 if pos>0 else 0.0)
+    def _rate(rows):
+        w=sum(r['outcome']=='T1' for r in rows);l=sum(r['outcome']=='SL' for r in rows);n=w+l
+        return (round(100*w/n,1) if n else 0.0),n,w,l
 
     @staticmethod
-    def _rate(rows):
-        w=sum(r['outcome']=='T1' for r in rows); l=sum(r['outcome']=='SL' for r in rows); n=w+l
-        return round(100*w/n,1) if n else 0.0,n,w,l
+    def _pf(rs):
+        pos=sum(x for x in rs if x>0);neg=abs(sum(x for x in rs if x<0))
+        return round(pos/neg,2) if neg>0 else (99.0 if pos>0 else 0.0)
 
     @staticmethod
     def _percentile(values,p):
         vals=sorted(values)
         if not vals:return 0.0
-        k=(len(vals)-1)*p; f=math.floor(k); c=math.ceil(k)
-        return float(vals[int(k)]) if f==c else float(vals[f]*(c-k)+vals[c]*(k-f))
+        k=(len(vals)-1)*p;f=math.floor(k);c=math.ceil(k)
+        if f==c:return float(vals[int(k)])
+        return float(vals[f]*(c-k)+vals[c]*(k-f))
 
     def _candidate_experiments(self, resolved):
         ideas=[]
-        def compare(name,pred_a,label_a,pred_b,label_b):
-            a=[r for r in resolved if pred_a(r)]; b=[r for r in resolved if pred_b(r)]
-            ra,na,_,_=self._rate(a); rb,nb,_,_=self._rate(b)
-            if na>=25 and nb>=25 and abs(ra-rb)>=8:
+        def cmp(name,pred_a,label_a,pred_b,label_b):
+            a=[r for r in resolved if pred_a(r)];b=[r for r in resolved if pred_b(r)]
+            ra,na,_,_=self._rate(a);rb,nb,_,_=self._rate(b)
+            if na>=20 and nb>=20 and abs(ra-rb)>=8:
                 ideas.append(f'A/B {name}: {label_a} {ra}% n={na} vs {label_b} {rb}% n={nb}')
-        compare('pattern',lambda r:r['features'].get('pattern')=='PULLBACK_SCALP','PULLBACK',
-                lambda r:r['features'].get('pattern')=='MOMENTUM_SCALP','MOMENTUM')
-        compare('ADX',lambda r:float(r['features'].get('adx5') or 0)>=18,'ADX>=18',
-                lambda r:float(r['features'].get('adx5') or 0)<18,'ADX<18')
-        compare('RVOL',lambda r:float(r['features'].get('rvol5') or 0)>=0.75,'RVOL>=0.75',
-                lambda r:float(r['features'].get('rvol5') or 0)<0.75,'RVOL<0.75')
-        compare('spread',lambda r:float(r['features'].get('option_spread_pct') or 99)<=2.5,'spread<=2.5%',
-                lambda r:2.5<float(r['features'].get('option_spread_pct') or 99)<=6,'spread2.5-6%')
+        cmp('pattern',lambda r:r['features'].get('pattern') in {'PULLBACK_SCALP','RETEST_SCALP'},'pullback/retest',
+            lambda r:r['features'].get('pattern') in {'MICRO_SCALP','MOMENTUM_SCALP','FLOW_SCALP'},'flow/momentum')
+        cmp('ADX',lambda r:float(r['features'].get('adx5') or 0)>=18,'ADX>=18',lambda r:float(r['features'].get('adx5') or 0)<18,'ADX<18')
+        cmp('RVOL',lambda r:float(r['features'].get('rvol5') or 0)>=0.75,'RVOL>=0.75',lambda r:float(r['features'].get('rvol5') or 0)<0.75,'RVOL<0.75')
+        cmp('spread',lambda r:float(r['features'].get('option_spread_pct') or 99)<=3,'spread<=3%',lambda r:3<float(r['features'].get('option_spread_pct') or 99)<=7.5,'spread3-7.5%')
         return ideas[:6]
 
     def summary(self):
-        with self.lock: records=self._records()
-        alerted=[r for r in records if r['outcome']!='SUPPRESSED']
-        suppressed=[r for r in records if r['outcome']=='SUPPRESSED']
-        binary=[r for r in alerted if r['outcome'] in {'T1','SL'}]
-        special=[r for r in alerted if r['outcome'] in {'STALE','INVALIDATED'}]
+        with self.lock:records=self._records()
+        alerted=[r for r in records if r['outcome']!='SUPPRESSED'];suppressed=[r for r in records if r['outcome']=='SUPPRESSED']
+        binary=[r for r in alerted if r['outcome'] in {'T1','SL'}];special=[r for r in alerted if r['outcome'] in {'STALE','INVALIDATED'}]
         open_rows=[r for r in alerted if r['outcome']=='OPEN']
-        rate,n_binary,w,l=self._rate(binary)
-        all_resolved=binary+special
-        rs=[r['outcome_r'] for r in all_resolved]
-        pf=self._pf(rs); expectancy=round(sum(rs)/len(rs),2) if rs else 0.0
+        rate,n_binary,w,l=self._rate(binary);all_resolved=binary+special
+        rs=[r['outcome_r'] for r in all_resolved];pf=self._pf(rs);expectancy=round(sum(rs)/len(rs),2) if rs else 0.0
         t1m=[r['seconds']/60 for r in binary if r['outcome']=='T1']
-        fast_sl=sum(r['outcome']=='SL' and r['seconds']<300 for r in binary)
-        fast_sl_pct=round(100*fast_sl/l,1) if l else 0.0
-        recovered=sum(r['outcome']=='SL' and r['recovered'] for r in binary)
-        recovery_pct=round(100*recovered/l,1) if l else 0.0
+        fast_sl=sum(r['outcome']=='SL' and r['seconds']<300 for r in binary);fast_sl_pct=round(100*fast_sl/l,1) if l else 0.0
+        recovered=sum(r['outcome']=='SL' and r['recovered'] for r in binary);recovery_pct=round(100*recovered/l,1) if l else 0.0
         stale_pct=round(100*len(special)/len(all_resolved),1) if all_resolved else 0.0
         days=len({datetime.fromtimestamp(r['created_at'],IST).date().isoformat() for r in alerted if r['created_at']})
-
         buckets={}
         for r in binary:
-            k=(r['underlying'],r['action']); q=buckets.setdefault(k,{'w':0,'l':0,'t1_sec':0.0,'sl_sec':0.0,'rs':[]})
+            k=(r['underlying'],r['action']);q=buckets.setdefault(k,{'w':0,'l':0,'t1_sec':0.0,'sl_sec':0.0,'rs':[]})
             q['rs'].append(r['outcome_r'])
-            if r['outcome']=='T1': q['w']+=1; q['t1_sec']+=r['seconds']
-            else: q['l']+=1; q['sl_sec']+=r['seconds']
+            if r['outcome']=='T1':q['w']+=1;q['t1_sec']+=r['seconds']
+            else:q['l']+=1;q['sl_sec']+=r['seconds']
         for q in buckets.values():
-            if q['w']: q['t1_sec']/=q['w']
-            if q['l']: q['sl_sec']/=q['l']
+            if q['w']:q['t1_sec']/=q['w']
+            if q['l']:q['sl_sec']/=q['l']
             q['pf']=self._pf(q.pop('rs'))
-
         c=ACCEPTANCE_CRITERIA
-        acceptance={
-            'resolved':len(all_resolved),'binary_resolved':n_binary,'calendar_days':days,'t1_success_pct':rate,
-            'profit_factor':pf,'expectancy_r':expectancy,
-            'median_t1_minutes':round(statistics.median(t1m),1) if t1m else 0.0,
-            'p75_t1_minutes':round(self._percentile(t1m,.75),1) if t1m else 0.0,
-            'fast_sl_pct':fast_sl_pct,'sl_later_t1_pct':recovery_pct,'stale_pct':stale_pct,'bucket_checks':[],
-        }
-        acceptance['promotion_ready']=bool(
-            len(all_resolved)>=c['min_resolved'] and days>=c['min_calendar_days'] and rate>=c['min_t1_success_pct'] and
-            pf>=c['min_profit_factor'] and expectancy>=c['min_expectancy_r'] and fast_sl_pct<=c['max_fast_sl_pct'] and
-            recovery_pct<=c['max_sl_later_t1_pct'] and stale_pct<=c['max_stale_pct']
-        )
-        return {
-            'epoch':RESEARCH_EPOCH,'total':len(alerted),'open':len(open_rows),'suppressed':len(suppressed),'recovered':recovered,
+        acceptance={'resolved':len(all_resolved),'binary_resolved':n_binary,'calendar_days':days,'t1_success_pct':rate,'profit_factor':pf,
+            'expectancy_r':expectancy,'median_t1_minutes':round(statistics.median(t1m),1) if t1m else 0.0,
+            'p75_t1_minutes':round(self._percentile(t1m,.75),1) if t1m else 0.0,'fast_sl_pct':fast_sl_pct,
+            'sl_later_t1_pct':recovery_pct,'stale_pct':stale_pct,'bucket_checks':[]}
+        acceptance['promotion_ready']=bool(len(all_resolved)>=c['min_resolved'] and days>=c['min_calendar_days'] and
+            rate>=c['min_t1_success_pct'] and pf>=c['min_profit_factor'] and expectancy>=c['min_expectancy_r'] and
+            fast_sl_pct<=c['max_fast_sl_pct'] and recovery_pct<=c['max_sl_later_t1_pct'] and stale_pct<=c['max_stale_pct'])
+        return {'epoch':RESEARCH_EPOCH,'total':len(alerted),'open':len(open_rows),'suppressed':len(suppressed),'recovered':recovered,
             'buckets':buckets,'acceptance':acceptance,'candidate_rules':self._candidate_experiments(binary),
             'avg_mfe_r':round(sum(r['mfe_r'] for r in binary)/len(binary),2) if binary else 0.0,
-            'avg_mae_r':round(sum(r['mae_r'] for r in binary)/len(binary),2) if binary else 0.0,
-        }
+            'avg_mae_r':round(sum(r['mae_r'] for r in binary)/len(binary),2) if binary else 0.0}
 
 
 class MarketReplay:
-    """Underlying-only V3.5 local scalp diagnostic; option premium is never fabricated."""
+    """Underlying-only V3.6 local-flow diagnostic; option premium is never fabricated."""
     @staticmethod
     def _features(rows):
-        closes=[r['close'] for r in rows]
-        px=closes[-1]; e5,e9,e20=ema(closes,5),ema(closes,9),ema(closes,20)
-        adx,pdi,mdi=directional_values(rows,14); a=atr(rows,14); vw=vwap(rows,30)
-        avg=sum(r['volume'] for r in rows[-21:-1])/max(1,len(rows[-21:-1])); rv=rows[-1]['volume']/avg if avg else 0
-        bull=sum((px>=e9,e5>=e9,pdi>=mdi,px>=vw))
-        bear=sum((px<=e9,e5<=e9,mdi>=pdi,px<=vw))
-        direction='BULLISH' if bull>=3 and bull>bear else ('BEARISH' if bear>=3 and bear>bull else 'MIXED')
+        closes=[r['close'] for r in rows];px=closes[-1];e5,e9,e20=ema(closes,5),ema(closes,9),ema(closes,20)
+        adx,pdi,mdi=directional_values(rows,14);a=atr(rows,14);vw=vwap(rows,30)
+        avg=sum(r['volume'] for r in rows[-21:-1])/max(1,len(rows[-21:-1]));rv=rows[-1]['volume']/avg if avg else 0
+        bull=sum((px>=e9,e5>=e9,pdi>=mdi,px>=vw*0.9985));bear=sum((px<=e9,e5<=e9,mdi>=pdi,px<=vw*1.0015))
+        direction='BULLISH' if bull>bear else ('BEARISH' if bear>bull else 'MIXED')
         return {'price':px,'direction':direction,'adx':adx,'rvol':rv,'atr':a}
-
     async def run(self,symbol,limit=600):
-        rows=await delta_market_service.get_candles(symbol,'5m',max(120,min(int(limit),600)))
-        events=[]
+        rows=await delta_market_service.get_candles(symbol,'5m',max(120,min(int(limit),600)));events=[]
         for i in range(40,len(rows)-8):
             f=self._features(rows[:i+1])
-            if f['direction']=='MIXED' or (f['adx']<7 and f['rvol']<0.18): continue
-            entry=rows[i]['close']; risk=max(f['atr']*.75,entry*.0005); up=f['direction']=='BULLISH'
-            sl=entry-risk if up else entry+risk; t1=entry+risk*1.85 if up else entry-risk*1.85
-            out='OPEN'; bars=0
+            if f['direction']=='MIXED' or (f['adx']<4 and f['rvol']<0.08):continue
+            entry=rows[i]['close'];risk=max(f['atr']*.75,entry*.0004);bull=f['direction']=='BULLISH'
+            sl=entry-risk if bull else entry+risk;t1=entry+risk*1.85 if bull else entry-risk*1.85;out='OPEN';bars=0
             for k in range(i+1,min(len(rows),i+9)):
-                bars=k-i; hi,lo=rows[k]['high'],rows[k]['low']
-                if up:
-                    if lo<=sl: out='SL'; break
-                    if hi>=t1: out='T1'; break
+                bars=k-i;hi,lo=rows[k]['high'],rows[k]['low']
+                if bull:
+                    if lo<=sl:out='SL';break
+                    if hi>=t1:out='T1';break
                 else:
-                    if hi>=sl: out='SL'; break
-                    if lo<=t1: out='T1'; break
+                    if hi>=sl:out='SL';break
+                    if lo<=t1:out='T1';break
             events.append((out,bars,f['adx'],f['rvol']))
-        done=[e for e in events if e[0] in {'T1','SL'}]
-        w=sum(e[0]=='T1' for e in done); l=sum(e[0]=='SL' for e in done)
-        return {'events':len(events),'resolved':len(done),'w':w,'l':l,
-                'rate':round(100*w/(w+l),1) if w+l else 0.0,
-                'avg_bars':round(sum(e[1] for e in done)/len(done),1) if done else 0.0,
-                'avg_adx':round(sum(e[2] for e in done)/len(done),1) if done else 0.0,
-                'avg_rvol':round(sum(e[3] for e in done)/len(done),2) if done else 0.0}
+        done=[e for e in events if e[0] in {'T1','SL'}];w=sum(e[0]=='T1' for e in done);l=sum(e[0]=='SL' for e in done)
+        return {'events':len(events),'resolved':len(done),'w':w,'l':l,'rate':round(100*w/(w+l),1) if w+l else 0.0,
+            'avg_bars':round(sum(e[1] for e in done)/len(done),1) if done else 0.0,
+            'avg_adx':round(sum(e[2] for e in done)/len(done),1) if done else 0.0,
+            'avg_rvol':round(sum(e[3] for e in done)/len(done),2) if done else 0.0}
 
 
-research_store=ResearchStore(); market_replay=MarketReplay()
+research_store=ResearchStore()
+market_replay=MarketReplay()
