@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF Fresh V3.5 Local Scalp
+name: Validate ROBO STAFF Fresh V3.6 Ultra Scalp
 
 on:
   pull_request:
@@ -18,73 +18,71 @@ jobs:
         run: |
           python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py market_research.py performance_store.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
 
-      - name: Validate V3.5 local scalp policy
+      - name: Validate V3.6 ultra-loose local scalp policy
         run: |
           python - <<'PY'
           from copy import deepcopy
           from pathlib import Path
           from polish_policy import (
               POLISH_VERSION, MODE_REVISION, MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE,
-              DAILY_RESEARCH_TARGET, evaluate_entry, contract_gate, quality_score,
-              quality_label, ACCEPTANCE_CRITERIA,
+              DAILY_RESEARCH_TARGET, BASE_COOLDOWN_MINUTES, evaluate_entry, contract_gate,
+              quality_score, quality_label, ACCEPTANCE_CRITERIA,
           )
 
-          assert POLISH_VERSION == 'FRESH_V3.5_LOCAL_SCALP_2026-09-29'
-          assert MODE_REVISION == 'LOCAL_1M5M_SCALP_FLOW_2026-09-29'
-          assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (50,68,84)
-          assert DAILY_RESEARCH_TARGET == 3
-          assert ACCEPTANCE_CRITERIA['min_resolved'] == 50
+          assert POLISH_VERSION == 'FRESH_V3.6_ULTRA_SCALP_2026-09-29'
+          assert MODE_REVISION == 'ULTRA_LOOSE_1M5M_FLOW_2026-09-29'
+          assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (36,55,75)
+          assert DAILY_RESEARCH_TARGET == 8
+          assert BASE_COOLDOWN_MINUTES == 3
+          assert ACCEPTANCE_CRITERIA['min_resolved'] == 60
 
           stats=Path('performance_store.py').read_text()
           research=Path('market_research.py').read_text()
-          assert "EPOCH='FRESH_V3.5_LOCAL_SCALP_2026-09-29'" in stats
-          assert "STATS_TABLE='delta_signal_stats_v35'" in stats
-          assert "RESEARCH_EPOCH = 'FRESH_V3.5_LOCAL_SCALP_2026-09-29'" in research
-          assert "RESEARCH_TABLE = 'delta_research_signals_v35'" in research
+          assert "EPOCH='FRESH_V3.6_ULTRA_SCALP_2026-09-29'" in stats
+          assert "STATS_TABLE='delta_signal_stats_v36'" in stats
+          assert "RESEARCH_EPOCH = 'FRESH_V3.6_ULTRA_SCALP_2026-09-29'" in research
+          assert "RESEARCH_TABLE = 'delta_research_signals_v36'" in research
 
           base={
-              'symbol':'BTCUSD','direction':'MIXED','structure':'LH/LL','pattern':'NONE',
+              'symbol':'BTCUSD','direction':'MIXED','structure':'RANGE','pattern':'NONE',
               'setup_id':'BTCUSD:MIXED:NONE:123','daily_zone':'ABOVE_R1','five_zone':'S1_TO_PIVOT',
-              'vwap_distance_atr':1.0,'ema9_distance_atr':0.45,'breakout_extension_atr':0.4,
+              'vwap_distance_atr':1.2,'ema9_distance_atr':0.8,'breakout_extension_atr':0.5,
               'ema_cross_5m':{'side':'NONE','bars_ago':None},
               'tf':{
-                  '1m':{'price':99.0,'ema5':99.2,'ema9':99.5,'vwap':99.8,'adx':10,'plus_di':18,'minus_di':25,'rsi':42,'williams_r':-70,'rel_volume':0.8},
-                  '5m':{'price':99.0,'ema5':99.3,'ema9':99.6,'ema20':100.2,'vwap':100.0,'adx':14,'plus_di':18,'minus_di':24,'rsi':40,'williams_r':-72,'rel_volume':0.45},
-                  '15m':{'price':100.5,'ema9':100.0,'vwap':100.1,'plus_di':25,'minus_di':20},
-                  '1h':{'price':101.0,'ema9':100.5,'vwap':100.7,'plus_di':26,'minus_di':19},
+                  '1m':{'price':99.2,'ema5':99.3,'ema9':99.5,'vwap':99.6,'adx':7,'plus_di':19,'minus_di':24,'rel_volume':0.25},
+                  '5m':{'price':99.0,'ema5':99.2,'ema9':99.5,'ema20':100.0,'vwap':99.8,'adx':9,'plus_di':19,'minus_di':23,'rel_volume':0.22},
+                  '15m':{'price':101,'ema9':100,'vwap':100,'plus_di':28,'minus_di':15},
+                  '1h':{'price':102,'ema9':101,'vwap':101,'plus_di':30,'minus_di':14},
               },
           }
           s=deepcopy(base)
           ok,reason=evaluate_entry('BTC','SETUP',s)
           assert ok, reason
           assert s['direction']=='BEARISH'
-          assert s['pattern'] in {'PULLBACK_SCALP','MOMENTUM_SCALP','EARLY_SCALP'}
           assert s['major_level_context_only'] is True
-          assert quality_score('BTC',s,7.0)>=MIN_ALERT_SCORE
+          assert s['ultra_loose_research'] is True
+          assert quality_score('BTC',s,5.0)>=MIN_ALERT_SCORE
 
-          # Higher timeframes may disagree: local 1m/5m flow remains authority.
-          s2=deepcopy(base)
-          s2['tf']['15m'].update({'price':102,'ema9':101,'vwap':101,'plus_di':30,'minus_di':15})
-          s2['tf']['1h'].update({'price':103,'ema9':102,'vwap':102,'plus_di':32,'minus_di':14})
-          assert evaluate_entry('BTC','SETUP',s2)[0] is True
+          # HTF disagreement cannot veto the local scalp.
+          assert evaluate_entry('BTC','SETUP',deepcopy(base))[0] is True
 
           dead=deepcopy(base)
-          dead['tf']['5m'].update({'adx':5,'rel_volume':0.10,'plus_di':20,'minus_di':20})
+          dead['tf']['5m'].update({'adx':2,'rel_volume':0.03,'plus_di':20,'minus_di':20})
+          dead['tf']['1m'].update({'plus_di':20,'minus_di':20})
           dead['structure']='RANGE'
-          # local direction may itself disappear; either way it must not emit.
           assert evaluate_entry('BTC','SETUP',dead)[0] is False
 
-          chase=deepcopy(base); chase['vwap_distance_atr']=4.0; chase['ema9_distance_atr']=2.2
+          chase=deepcopy(base);chase['vwap_distance_atr']=5.5;chase['ema9_distance_atr']=3.2
           assert evaluate_entry('BTC','SETUP',chase)[0] is False
 
-          assert contract_gate('BTC','OPTION BUY',entry=1.0,bid=.99,ask=1.01,spot=80000,delta=.30,minutes_to_expiry=180,python_score=55)[0] is True
-          assert contract_gate('BTC','OPTION SELL',entry=1.0,bid=.99,ask=1.01,spot=80000,delta=.20,minutes_to_expiry=180,python_score=50)[0] is True
-          assert contract_gate('BTC','OPTION BUY',entry=.01,bid=.01,ask=.02,spot=80000,delta=.30,minutes_to_expiry=180,python_score=80)[0] is False
-          assert quality_label(50)=='VALID' and quality_label(68)=='STRONG' and quality_label(84)=='ELITE'
-          print('FRESH_V35_LOCAL_SCALP_POLICY_OK')
+          assert contract_gate('BTC','OPTION BUY',entry=1.0,bid=.98,ask=1.02,spot=80000,delta=.25,minutes_to_expiry=120,python_score=42)[0] is True
+          assert contract_gate('BTC','OPTION SELL',entry=1.0,bid=.98,ask=1.02,spot=80000,delta=.18,minutes_to_expiry=120,python_score=38)[0] is True
+          assert contract_gate('BTC','OPTION BUY',entry=.01,bid=.01,ask=.02,spot=80000,delta=.25,minutes_to_expiry=120,python_score=80)[0] is False
+          assert quality_label(36)=='VALID' and quality_label(55)=='STRONG' and quality_label(75)=='ELITE'
+          print('FRESH_V36_ULTRA_SCALP_POLICY_OK')
           PY
 
-      - name: Validate Master Mind simple alert and signal-only safety
+      - name: Validate Master Mind NIFTY-style alert and signal-only safety
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -93,19 +91,19 @@ jobs:
           master=Path('master_mind_scalp.py').read_text()
           app=Path('app.py').read_text()
 
-          assert 'LOCAL_1M5M_SCALP_FLOW_2026-09-29' in policy
-          assert 'major_level_context_only' in policy
-          assert 'MASTER_MIND_BTC_5M_V2_SIMPLE_2026-09-29' in master
-          assert '🔴🚨 MASTER MIND SIGNAL ALERT 🚨🔴' in master
-          assert 'Confirmations:' in master
-          assert '⭐ Score:' in master
-          assert 'Version:' not in master
+          assert 'ULTRA_LOOSE_1M5M_FLOW_2026-09-29' in policy
+          assert 'MASTER_MIND_BTC_MTF_NIFTY_V3_2026-09-29' in master
+          for text in [
+              '15M higher-timeframe price action','15M EMA 9/21 bearish confirmation',
+              '5M EMA 9/21 bearish','1M EMA 9/21 bearish','Williams %R bearish',
+              'Below daily CPR','Below daily Fib S1','Option liquidity:','Confirmations:'
+          ]:
+              assert text in master, text
           assert 'master_mind_scalp_engine' in app
           assert 'DeltaAutoSignalEngine' in engine
-
           forbidden=['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', 'DELTA_API_SECRET', 'DELTA_API_KEY']
           for needle in forbidden:
               assert needle not in engine, needle
               assert needle not in master, needle
-          print('V35_AND_MASTER_MIND_SIMPLE_SIGNAL_ONLY_OK')
+          print('V36_AND_MASTER_MIND_NIFTY_SIGNAL_ONLY_OK')
           PY
