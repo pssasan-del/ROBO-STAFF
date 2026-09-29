@@ -9,6 +9,7 @@ from strategy_engine import engine
 from bot import telegram_bot
 from delta_signal_engine import delta_auto_engine
 from master_mind_scalp import master_mind_scalp_engine
+from short_signal_formatter import format_short_signal
 
 async def heartbeat_loop():
     """Lightweight internal health heartbeat. It does not bypass Render sleep; it confirms recovery once the service is awake."""
@@ -46,6 +47,7 @@ async def lifespan(app:FastAPI):
     print('='*58+'\n')
     engine.set_alert_callback(telegram_bot.alert)
     delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
+    delta_auto_engine.format_signal=lambda c: format_short_signal(delta_auto_engine,c)
     master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)
     tasks=[
         asyncio.create_task(telegram_bot.poll(),name='telegram-poll'),
