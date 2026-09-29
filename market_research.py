@@ -11,12 +11,12 @@ from strategy_engine import ema, atr, vwap, directional_values
 from polish_policy import ACCEPTANCE_CRITERIA
 
 IST = timezone(timedelta(hours=5, minutes=30))
-RESEARCH_EPOCH = 'FRESH_V3.6_ULTRA_SCALP_2026-09-29'
-RESEARCH_TABLE = 'delta_research_signals_v36'
+RESEARCH_EPOCH = 'FRESH_V4.0_PRECISION_SCALP_2026-09-29'
+RESEARCH_TABLE = 'delta_research_signals_v40'
 
 
 class ResearchStore:
-    """Bounded V3.6 telemetry. Research observes only; it never edits live rules."""
+    """Bounded V4.0 telemetry. Research observes only; it never edits live rules."""
     def __init__(self):
         self.lock = threading.RLock()
         self.rows = deque(maxlen=400)
@@ -39,7 +39,7 @@ class ResearchStore:
                         mfe_pct DOUBLE PRECISION DEFAULT 0, mae_pct DOUBLE PRECISION DEFAULT 0,
                         mfe_r DOUBLE PRECISION DEFAULT 0, mae_r DOUBLE PRECISION DEFAULT 0,
                         updated_at TEXT NOT NULL)''')
-                logger.info('[RESEARCH] Fresh V3.6 PostgreSQL telemetry enabled; older epochs excluded')
+                logger.info('[RESEARCH] Fresh V4.0 PostgreSQL telemetry enabled; older epochs excluded')
         except Exception as exc:
             logger.warning('[RESEARCH] PostgreSQL unavailable; bounded RAM fallback: %s', exc)
             self.pg = False
@@ -165,11 +165,11 @@ class ResearchStore:
             ra,na,_,_=self._rate(a);rb,nb,_,_=self._rate(b)
             if na>=20 and nb>=20 and abs(ra-rb)>=8:
                 ideas.append(f'A/B {name}: {label_a} {ra}% n={na} vs {label_b} {rb}% n={nb}')
-        cmp('pattern',lambda r:r['features'].get('pattern') in {'PULLBACK_SCALP','RETEST_SCALP'},'pullback/retest',
-            lambda r:r['features'].get('pattern') in {'MICRO_SCALP','MOMENTUM_SCALP','FLOW_SCALP'},'flow/momentum')
-        cmp('ADX',lambda r:float(r['features'].get('adx5') or 0)>=18,'ADX>=18',lambda r:float(r['features'].get('adx5') or 0)<18,'ADX<18')
-        cmp('RVOL',lambda r:float(r['features'].get('rvol5') or 0)>=0.75,'RVOL>=0.75',lambda r:float(r['features'].get('rvol5') or 0)<0.75,'RVOL<0.75')
-        cmp('spread',lambda r:float(r['features'].get('option_spread_pct') or 99)<=3,'spread<=3%',lambda r:3<float(r['features'].get('option_spread_pct') or 99)<=7.5,'spread3-7.5%')
+        cmp('pattern',lambda r:r['features'].get('pattern') in {'PULLBACK_RECLAIM','RETEST_CONFIRM'},'pullback/retest',
+            lambda r:r['features'].get('pattern') in {'BREAKOUT_RETEST','TREND_RESUME'},'breakout/resume')
+        cmp('ADX',lambda r:float(r['features'].get('adx5') or 0)>=20,'ADX>=20',lambda r:14<=float(r['features'].get('adx5') or 0)<20,'ADX14-20')
+        cmp('RVOL',lambda r:float(r['features'].get('rvol5') or 0)>=0.8,'RVOL>=0.8',lambda r:float(r['features'].get('rvol5') or 0)<0.8,'RVOL<0.8')
+        cmp('spread',lambda r:float(r['features'].get('option_spread_pct') or 99)<=2,'spread<=2%',lambda r:2<float(r['features'].get('option_spread_pct') or 99)<=4.2,'spread2-4.2%')
         return ideas[:6]
 
     def summary(self):
@@ -209,22 +209,22 @@ class ResearchStore:
 
 
 class MarketReplay:
-    """Underlying-only V3.6 local-flow diagnostic; option premium is never fabricated."""
+    """Underlying-only V4 precision diagnostic; option premium is never fabricated."""
     @staticmethod
     def _features(rows):
         closes=[r['close'] for r in rows];px=closes[-1];e5,e9,e20=ema(closes,5),ema(closes,9),ema(closes,20)
         adx,pdi,mdi=directional_values(rows,14);a=atr(rows,14);vw=vwap(rows,30)
         avg=sum(r['volume'] for r in rows[-21:-1])/max(1,len(rows[-21:-1]));rv=rows[-1]['volume']/avg if avg else 0
-        bull=sum((px>=e9,e5>=e9,pdi>=mdi,px>=vw*0.9985));bear=sum((px<=e9,e5<=e9,mdi>=pdi,px<=vw*1.0015))
-        direction='BULLISH' if bull>bear else ('BEARISH' if bear>bull else 'MIXED')
+        bull=(px>=e9>=e20 and pdi>mdi and px>=vw);bear=(px<=e9<=e20 and mdi>pdi and px<=vw)
+        direction='BULLISH' if bull else ('BEARISH' if bear else 'MIXED')
         return {'price':px,'direction':direction,'adx':adx,'rvol':rv,'atr':a}
     async def run(self,symbol,limit=600):
         rows=await delta_market_service.get_candles(symbol,'5m',max(120,min(int(limit),600)));events=[]
         for i in range(40,len(rows)-8):
             f=self._features(rows[:i+1])
-            if f['direction']=='MIXED' or (f['adx']<4 and f['rvol']<0.08):continue
-            entry=rows[i]['close'];risk=max(f['atr']*.75,entry*.0004);bull=f['direction']=='BULLISH'
-            sl=entry-risk if bull else entry+risk;t1=entry+risk*1.85 if bull else entry-risk*1.85;out='OPEN';bars=0
+            if f['direction']=='MIXED' or f['adx']<14:continue
+            entry=rows[i]['close'];risk=max(f['atr']*.70,entry*.0004);bull=f['direction']=='BULLISH'
+            sl=entry-risk if bull else entry+risk;t1=entry+risk*1.20 if bull else entry-risk*1.20;out='OPEN';bars=0
             for k in range(i+1,min(len(rows),i+9)):
                 bars=k-i;hi,lo=rows[k]['high'],rows[k]['low']
                 if bull:
