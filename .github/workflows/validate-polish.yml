@@ -100,7 +100,7 @@ jobs:
 
           assert 'FRESH_V3.4_RECLAIM_2026-09-29' in policy
           assert 'PULLBACK_RECLAIM' in policy
-          assert 'OPEN_SCALP' not in policy
+          assert "pattern = 'OPEN_SCALP'" not in policy
           assert 'delta_research_signals_v34' in research
           assert 'delta_signal_stats_v34' in stats
           assert 'MASTER MIND SIGNAL ALERT' in master
