@@ -1,4 +1,4 @@
-name: Validate Master Mind BTC NIFTY-Style Scalp
+name: Validate Master Mind BTC + XAUT NIFTY-Style Scalp
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ jobs:
         run: |
           python -m py_compile master_mind_scalp.py app.py delta_signal_engine.py polish_policy.py
 
-      - name: Validate isolation and NIFTY-style confirmation stack
+      - name: Validate isolation and BTC/XAUT confirmation stack
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -27,30 +27,45 @@ jobs:
 
           required=[
               'MASTER MIND SIGNAL ALERT',
-              'MASTER_MIND_BTC_MTF_NIFTY_V3_2026-09-29',
-              "get_candles(MASTER_MIND_SYMBOL,'1m'",
-              "get_candles(MASTER_MIND_SYMBOL,'5m'",
-              "get_candles(MASTER_MIND_SYMBOL,'15m'",
-              '_ema(c1,9)','_ema(c1,21)','_ema(c5,9)','_ema(c5,21)','_ema(c15,9)','_ema(c15,21)',
-              '_williams(r5,14)','_cpr(days[-1])','fibonacci_pivots(days[-1])',
+              'MASTER_MIND_BTC_XAUT_MTF_NIFTY_V4_2026-09-29',
+              'MASTER_MIND_SYMBOLS = ("BTCUSD", "XAUTUSD")',
+              "get_candles(symbol, '1m'",
+              "get_candles(symbol, '5m'",
+              "get_candles(symbol, '15m'",
+              "get_candles(symbol, '1d'",
+              "get_chain(underlying)", "get_chain('PAXG')",
+              '_ema(c1, 9)','_ema(c1, 21)','_ema(c5, 9)','_ema(c5, 21)','_ema(c15, 9)','_ema(c15, 21)',
+              '_williams(r5, 14)','_cpr(days[-1])','fibonacci_pivots(days[-1])',
               '15M higher-timeframe price action','15M EMA 9/21 bullish confirmation','15M EMA 9/21 bearish confirmation',
               '5M EMA 9/21 bullish','5M EMA 9/21 bearish','1M EMA 9/21 bullish','1M EMA 9/21 bearish',
               'Williams %R bullish','Williams %R bearish','Above daily CPR','Below daily CPR',
-              'Above daily Fib R1','Below daily Fib S1','Option liquidity:','Confirmations:','SIGNAL ONLY'
+              'Above daily Fib R1','Below daily Fib S1','Option liquidity:','Confirmations:','SIGNAL ONLY',
+              'last_alert_at = {s: 0.0 for s in MASTER_MIND_SYMBOLS}',
+              'last_status_by_symbol',
           ]
-          for needle in required:assert needle in mm,needle
+          for needle in required:
+              assert needle in mm, needle
 
-          # Old EMA95/McGinley/Momentum-only Master Mind logic was intentionally replaced.
+          # Separate cooldown per symbol; BTC must never block Gold.
+          assert "self.last_alert_at.get(symbol, 0.0)" in mm
+          assert "self.last_alert_key.get(symbol, '')" in mm
+          assert "for symbol in MASTER_MIND_SYMBOLS" in mm
+          assert "XAUTUSD (GOLD)" in mm
+
+          # Old EMA95/McGinley/Momentum-only Master Mind logic remains removed.
           assert '_mcginley(' not in mm
           assert '_momentum(' not in mm
           assert '_ema(c5,95)' not in mm
 
           assert 'master_mind_scalp_engine.loop()' in app
           assert 'master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)' in app
+          assert "'master_mind_symbols':['BTCUSD','XAUTUSD']" in app
+          assert 'master_mind_status_by_symbol' in app
+
           for forbidden in [
               'performance_store','research_store','BASE_COOLDOWN_MINUTES','FAIL_COOLDOWN_MINUTES','SUCCESS_COOLDOWN_MINUTES',
               'place_order(','modify_order(','cancel_order(','square_off(','DELTA_API_KEY','DELTA_API_SECRET'
           ]:
-              assert forbidden not in mm,forbidden
-          print('MASTER_MIND_NIFTY_STYLE_ISOLATION_OK')
+              assert forbidden not in mm, forbidden
+          print('MASTER_MIND_BTC_XAUT_NIFTY_STYLE_ISOLATION_OK')
           PY
