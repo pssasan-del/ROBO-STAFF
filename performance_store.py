@@ -8,13 +8,14 @@ BASE_KEYS=(
     'buy_success','buy_failed','sell_success','sell_failed',
     'ai_confirmed','no_ai_confirmation','sl_later_t1','sl_later_t2'
 )
-STATS_TABLE='delta_signal_stats_v32'
+STATS_TABLE='delta_signal_stats_v34'
+EPOCH='FRESH_V3.4_RECLAIM_2026-09-29'
 
 
 class PerformanceStore:
-    """Fresh V3.2 bounded aggregate statistics. Older epochs are excluded."""
+    """Fresh V3.4 bounded aggregate statistics. Older epochs are excluded."""
     def __init__(self,path=None):
-        self.path=(path or settings.DELTA_STATS_PATH)+'.v32';self.lock=threading.RLock();self.data={'days':{}}
+        self.path=(path or settings.DELTA_STATS_PATH)+'.v34';self.lock=threading.RLock();self.data={'days':{}}
         self.pg=False;self.conn=None;self._init_persistent();self._load();self._prune()
 
     def _init_persistent(self):
@@ -23,7 +24,7 @@ class PerformanceStore:
                 import psycopg
                 self.conn=psycopg.connect(settings.DATABASE_URL,autocommit=True);self.pg=True
                 with self.conn.cursor() as cur:cur.execute(f'''CREATE TABLE IF NOT EXISTS {STATS_TABLE}(day TEXT PRIMARY KEY,payload_json TEXT NOT NULL,updated_at TEXT NOT NULL)''')
-                logger.info('[DELTA_STATS] Fresh V3.2 PostgreSQL aggregate persistence enabled')
+                logger.info('[DELTA_STATS] Fresh V3.4 PostgreSQL aggregate persistence enabled')
         except Exception as e:
             logger.warning('[DELTA_STATS] PostgreSQL unavailable; file fallback: %s',e);self.conn=None;self.pg=False
 
@@ -108,7 +109,7 @@ class PerformanceStore:
     def report(self,days=1):
         with self.lock:
             today=datetime.now(IST).date();keys=[(today-timedelta(days=i)).isoformat() for i in range(days)]
-            out={k:0 for k in BASE_KEYS};out.update({'assets':{},'ai':{},'actions':{},'timing':{},'epoch':'FRESH_V3.2_2026-09-27'})
+            out={k:0 for k in BASE_KEYS};out.update({'assets':{},'ai':{},'actions':{},'timing':{},'epoch':EPOCH})
             for day in keys:
                 src=self.data.get('days',{}).get(day,{})
                 for k in BASE_KEYS:out[k]+=int(src.get(k,0))
