@@ -44,7 +44,7 @@ async def lifespan(app:FastAPI):
     print(' [UPLOAD] Telegram text/photo/PDF/TXT/MD/JSON strategy input: ENABLED')
     print(' [RECOVERY] Delta WS auto-reconnect + heartbeat: ENABLED')
     print(' [ROBO STAFF] V4 precision pullback/retest scalp: ENABLED')
-    print(' [MASTER MIND] BTCUSD 5m isolated scalp alerts: ENABLED')
+    print(' [MASTER MIND] BTCUSD + XAUTUSD (GOLD) isolated scalp alerts: ENABLED')
     print(' [SAFETY] Auto-trading: DISABLED')
     print('='*58+'\n')
     engine.set_alert_callback(telegram_bot.alert)
@@ -57,7 +57,7 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(delta_market_service.websocket_loop(),name='delta-ws'),
         asyncio.create_task(engine.loop(),name='strategy-engine'),
         asyncio.create_task(delta_auto_engine.loop(),name='delta-auto-signal-engine'),
-        asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-5m-scalp'),
+        asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-xaut-scalp'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
     logger.info('[APP] Delta-only crypto AI bot V9 started; V4 precision overlay=%s restored_active=%s',
@@ -85,6 +85,8 @@ def health():
         'last_scan_age_seconds':round(now-engine.last_scan_at,1) if engine.last_scan_at else None,
         'precision_overlay':bool(getattr(delta_auto_engine,'precision_overlay_installed',False)),
         'master_mind_status':master_mind_scalp_engine.last_status,
+        'master_mind_status_by_symbol':master_mind_scalp_engine.last_status_by_symbol,
+        'master_mind_symbols':['BTCUSD','XAUTUSD'],
         'master_mind_last_scan_age_seconds':round(now-master_mind_scalp_engine.last_scan_at,1) if master_mind_scalp_engine.last_scan_at else None,
         'active_strategies':len(strategy_store.list_active()) if strategy_store.conn else 0,
         'database':'postgresql' if strategy_store.pg else 'sqlite',
