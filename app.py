@@ -10,6 +10,7 @@ from bot import telegram_bot
 from delta_signal_engine import delta_auto_engine
 from master_mind_scalp import master_mind_scalp_engine
 from short_signal_formatter import format_short_signal
+from precision_overlay import install_precision_overlay
 
 async def heartbeat_loop():
     """Lightweight internal health heartbeat. It does not bypass Render sleep; it confirms recovery once the service is awake."""
@@ -42,10 +43,12 @@ async def lifespan(app:FastAPI):
     print(f' [RESTORE] {restored} previously-active scanner(s) will resume automatically')
     print(' [UPLOAD] Telegram text/photo/PDF/TXT/MD/JSON strategy input: ENABLED')
     print(' [RECOVERY] Delta WS auto-reconnect + heartbeat: ENABLED')
+    print(' [ROBO STAFF] V4 precision pullback/retest scalp: ENABLED')
     print(' [MASTER MIND] BTCUSD 5m isolated scalp alerts: ENABLED')
     print(' [SAFETY] Auto-trading: DISABLED')
     print('='*58+'\n')
     engine.set_alert_callback(telegram_bot.alert)
+    install_precision_overlay(delta_auto_engine)
     delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
     delta_auto_engine.format_signal=lambda c: format_short_signal(delta_auto_engine,c)
     master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)
@@ -57,7 +60,8 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-5m-scalp'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] Delta-only crypto AI bot V9 started; restored_active=%s',restored)
+    logger.info('[APP] Delta-only crypto AI bot V9 started; V4 precision overlay=%s restored_active=%s',
+                getattr(delta_auto_engine,'precision_overlay_installed',False),restored)
     yield
     telegram_bot.running=False;engine.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
@@ -79,13 +83,12 @@ def health():
         'delta_ws_reconnects':delta_market_service.reconnect_count,
         'engine_heartbeat_age_seconds':round(now-engine.last_loop_heartbeat,1) if engine.last_loop_heartbeat else None,
         'last_scan_age_seconds':round(now-engine.last_scan_at,1) if engine.last_scan_at else None,
+        'precision_overlay':bool(getattr(delta_auto_engine,'precision_overlay_installed',False)),
         'master_mind_status':master_mind_scalp_engine.last_status,
         'master_mind_last_scan_age_seconds':round(now-master_mind_scalp_engine.last_scan_at,1) if master_mind_scalp_engine.last_scan_at else None,
         'active_strategies':len(strategy_store.list_active()) if strategy_store.conn else 0,
         'database':'postgresql' if strategy_store.pg else 'sqlite',
         'photo_strategy_upload':True,
         'symbols':settings.delta_symbols(),
-        'min_rr':settings.MIN_RR,
-        'targets_rr':[settings.RR_T1,settings.RR_T2,settings.RR_T3],
         'auto_trading':False
     }
