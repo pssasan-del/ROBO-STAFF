@@ -8,14 +8,14 @@ BASE_KEYS=(
     'buy_success','buy_failed','sell_success','sell_failed',
     'ai_confirmed','no_ai_confirmation','sl_later_t1','sl_later_t2'
 )
-STATS_TABLE='delta_signal_stats_v36'
-EPOCH='FRESH_V3.6_ULTRA_SCALP_2026-09-29'
+STATS_TABLE='delta_signal_stats_v37'
+EPOCH='FRESH_V3.7_BALANCED_SCALP_2026-09-29'
 
 
 class PerformanceStore:
-    """Fresh V3.6 bounded aggregate statistics. Older epochs are excluded."""
+    """Fresh V3.7 bounded aggregate statistics. Older epochs are excluded."""
     def __init__(self,path=None):
-        self.path=(path or settings.DELTA_STATS_PATH)+'.v36';self.lock=threading.RLock();self.data={'days':{}}
+        self.path=(path or settings.DELTA_STATS_PATH)+'.v37';self.lock=threading.RLock();self.data={'days':{}}
         self.pg=False;self.conn=None;self._init_persistent();self._load();self._prune()
 
     def _init_persistent(self):
@@ -24,7 +24,7 @@ class PerformanceStore:
                 import psycopg
                 self.conn=psycopg.connect(settings.DATABASE_URL,autocommit=True);self.pg=True
                 with self.conn.cursor() as cur:cur.execute(f'''CREATE TABLE IF NOT EXISTS {STATS_TABLE}(day TEXT PRIMARY KEY,payload_json TEXT NOT NULL,updated_at TEXT NOT NULL)''')
-                logger.info('[DELTA_STATS] Fresh V3.6 PostgreSQL aggregate persistence enabled')
+                logger.info('[DELTA_STATS] Fresh V3.7 PostgreSQL aggregate persistence enabled')
         except Exception as e:
             logger.warning('[DELTA_STATS] PostgreSQL unavailable; file fallback: %s',e);self.conn=None;self.pg=False
 
