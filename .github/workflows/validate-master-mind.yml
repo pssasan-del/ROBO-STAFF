@@ -18,7 +18,7 @@ jobs:
         run: |
           python -m py_compile master_mind_scalp.py app.py delta_signal_engine.py polish_policy.py
 
-      - name: Validate isolation and locked indicator stack
+      - name: Validate isolation, locked stack and simple alert
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -28,11 +28,11 @@ jobs:
 
           required = [
               'MASTER MIND SIGNAL ALERT',
-              'MASTER_MIND_BTC_5M_V1_2026-09-28',
-              '_mcginley_series',
-              '_momentum(closes, 10)',
-              '_ema(closes, 9)',
-              '_ema(closes, 95)',
+              'MASTER_MIND_BTC_5M_V2_SIMPLE_2026-09-29',
+              '_mcginley(',
+              '_momentum(closes,10)',
+              '_ema(closes,9)',
+              '_ema(closes,95)',
               'fibonacci_pivots',
               'Volume',
               'Breakout',
@@ -40,12 +40,14 @@ jobs:
               'Exhaustion Reversal',
               'SELL OTM PUT',
               'SELL OTM CALL',
+              'Confirmations:',
+              '⭐ Score:',
               'SIGNAL ONLY',
           ]
           for needle in required:
               assert needle in mm, needle
 
-          # Separate loop/callback: it must not use ROBO STAFF cooldown or stats.
+          assert 'Version:' not in mm
           assert 'master_mind_scalp_engine.loop()' in app
           assert 'master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)' in app
           for forbidden in [
@@ -56,5 +58,5 @@ jobs:
           ]:
               assert forbidden not in mm, forbidden
 
-          print('MASTER_MIND_ISOLATION_AND_STACK_OK')
+          print('MASTER_MIND_V2_SIMPLE_ISOLATION_AND_STACK_OK')
           PY
