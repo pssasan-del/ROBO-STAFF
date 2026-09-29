@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF Fresh V3.3 Loose
+name: Validate ROBO STAFF Fresh V3.4 Reclaim
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ jobs:
         run: |
           python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py market_research.py performance_store.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
 
-      - name: Validate V3.3 loose first-strategy policy
+      - name: Validate V3.4 pullback-reclaim first-strategy policy
         run: |
           python - <<'PY'
           from copy import deepcopy
@@ -27,22 +27,28 @@ jobs:
               DAILY_RESEARCH_TARGET, evaluate_entry, evaluate_contract, contract_gate,
               quality_score, quality_label, ACCEPTANCE_CRITERIA,
           )
+          from performance_store import EPOCH, STATS_TABLE
+          from market_research import RESEARCH_EPOCH, RESEARCH_TABLE
 
-          assert POLISH_VERSION == 'FRESH_V3.3_LOOSE_2026-09-29'
-          assert MODE_REVISION == 'OPEN_SCALP_RESEARCH_2026-09-29'
-          assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (55, 75, 90)
+          assert POLISH_VERSION == 'FRESH_V3.4_RECLAIM_2026-09-29'
+          assert MODE_REVISION == 'PULLBACK_RECLAIM_SCALP_2026-09-29'
+          assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (60, 76, 90)
           assert DAILY_RESEARCH_TARGET == 3
+          assert EPOCH == POLISH_VERSION
+          assert RESEARCH_EPOCH == POLISH_VERSION
+          assert STATS_TABLE == 'delta_signal_stats_v34'
+          assert RESEARCH_TABLE == 'delta_research_signals_v34'
           assert ACCEPTANCE_CRITERIA['min_resolved'] == 50
 
           base = {
-              'symbol':'BTCUSD','direction':'MIXED','structure':'RANGE','pattern':'NONE',
+              'symbol':'BTCUSD','direction':'MIXED','structure':'LH/LL','pattern':'NONE',
               'setup_id':'BTCUSD:MIXED:NONE:123','daily_zone':'S1_TO_PIVOT','five_zone':'S1_TO_PIVOT',
-              'vwap_distance_atr':1.2,'ema9_distance_atr':0.55,
+              'vwap_distance_atr':0.8,'ema9_distance_atr':0.45,'breakout_extension_atr':0.3,
               'ema_cross_5m':{'side':'NONE','bars_ago':None},
               'tf':{
                   '1m':{'price':99.0,'ema5':99.2,'ema9':99.5,'ema20':100.0,'vwap':99.8,'adx':12,'plus_di':18,'minus_di':25,'rsi':42,'williams_r':-70,'rel_volume':0.8},
                   '5m':{'price':99.0,'ema5':99.3,'ema9':99.6,'ema20':100.2,'vwap':100.0,'adx':18,'plus_di':18,'minus_di':24,'rsi':40,'williams_r':-72,'rel_volume':0.55},
-                  '15m':{'price':99.2,'ema5':99.5,'ema9':99.8,'ema20':100.1,'vwap':99.9,'adx':16,'plus_di':19,'minus_di':23,'trend':'MIXED'},
+                  '15m':{'price':99.2,'ema5':99.5,'ema9':99.8,'ema20':100.1,'vwap':99.9,'adx':16,'plus_di':19,'minus_di':23,'trend':'BEARISH'},
                   '1h':{'price':100.0,'ema5':100.1,'ema9':100.2,'ema20':100.3,'vwap':100.1,'adx':14,'plus_di':21,'minus_di':22,'trend':'MIXED'},
               },
           }
@@ -50,42 +56,55 @@ jobs:
           ok, reason = evaluate_entry('BTC','SETUP',s)
           assert ok, reason
           assert s['direction'] == 'BEARISH'
-          assert s['pattern'] in {'OPEN_SCALP','TREND_SCALP'}
+          assert s['pattern'] == 'PULLBACK_RECLAIM'
           assert quality_score('BTC',s,8.0) >= MIN_ALERT_SCORE
 
+          # No blind OPEN_SCALP: micro/5m mismatch must wait.
+          mismatch = deepcopy(base)
+          mismatch['tf']['1m'].update({'price':100.5,'ema5':100.4,'ema9':100.0,'plus_di':28,'minus_di':18})
+          assert evaluate_entry('BTC','SETUP',mismatch)[0] is False
+
+          # Dead tape stays blocked.
           dead = deepcopy(base)
           dead['tf']['5m'].update({'adx':8,'rel_volume':0.20,'plus_di':20,'minus_di':20})
-          dead['tf']['1m'].update({'adx':5,'plus_di':20,'minus_di':20})
+          dead['structure'] = 'RANGE'
           assert evaluate_entry('BTC','SETUP',dead)[0] is False
 
+          # Extreme chase stays blocked.
           chase = deepcopy(base)
-          chase['vwap_distance_atr'] = 3.8
-          chase['ema9_distance_atr'] = 2.0
+          chase['vwap_distance_atr'] = 3.0
+          chase['ema9_distance_atr'] = 1.6
           assert evaluate_entry('BTC','SETUP',chase)[0] is False
 
+          # Contract safety + action-specific quality.
           assert evaluate_contract(0.01,bid=0.01,ask=0.02,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is False
-          assert evaluate_contract(1.00,bid=.985,ask=1.015,underlying='BTC',action='OPTION BUY',spot=80000,delta=.35)[0] is True
-          assert evaluate_contract(1.00,bid=.98,ask=1.02,underlying='ETH',action='OPTION BUY',spot=3000,delta=.20)[0] is True
+          assert contract_gate('BTC','OPTION BUY',entry=1.00,bid=.99,ask=1.01,spot=80000,delta=.35,minutes_to_expiry=300,python_score=62)[0] is False
+          assert contract_gate('BTC','OPTION BUY',entry=1.00,bid=.99,ask=1.01,spot=80000,delta=.35,minutes_to_expiry=300,python_score=70)[0] is True
+          assert contract_gate('BTC','OPTION SELL',entry=1.00,bid=.99,ask=1.01,spot=80000,delta=.25,minutes_to_expiry=300,python_score=60)[0] is True
           assert evaluate_contract(1.00,bid=.99,ask=1.01,underlying='BTC',action='OPTION BUY',spot=80000,delta=.05)[0] is False
-          assert contract_gate('GOLD','OPTION SELL',entry=1.00,bid=.98,ask=1.02,spot=4300,delta=-.20,minutes_to_expiry=180,python_score=70)[0] is True
 
-          assert quality_label(55) == 'VALID'
-          assert quality_label(75) == 'STRONG'
+          assert quality_label(60) == 'VALID'
+          assert quality_label(76) == 'STRONG'
           assert quality_label(90) == 'ELITE'
-          print('FRESH_V33_OPEN_SCALP_POLICY_OK')
+          print('FRESH_V34_PULLBACK_RECLAIM_POLICY_OK')
           PY
 
-      - name: Validate safety and module separation
+      - name: Validate safety and Master Mind separation
         run: |
           python - <<'PY'
           from pathlib import Path
           engine = Path('delta_signal_engine.py').read_text()
           policy = Path('polish_policy.py').read_text()
+          research = Path('market_research.py').read_text()
+          stats = Path('performance_store.py').read_text()
           master = Path('master_mind_scalp.py').read_text()
           app = Path('app.py').read_text()
 
-          assert 'FRESH_V3.3_LOOSE_2026-09-29' in policy
-          assert 'OPEN_SCALP_RESEARCH_2026-09-29' in policy
+          assert 'FRESH_V3.4_RECLAIM_2026-09-29' in policy
+          assert 'PULLBACK_RECLAIM' in policy
+          assert 'OPEN_SCALP' not in policy
+          assert 'delta_research_signals_v34' in research
+          assert 'delta_signal_stats_v34' in stats
           assert 'MASTER MIND SIGNAL ALERT' in master
           assert 'master_mind_scalp_engine' in app
           assert 'DeltaAutoSignalEngine' in engine
@@ -95,5 +114,5 @@ jobs:
               assert needle not in engine, needle
               assert needle not in master, needle
 
-          print('V33_LOOSE_SIGNAL_ONLY_SEPARATION_OK')
+          print('V34_SIGNAL_ONLY_AND_MASTER_MIND_SEPARATION_OK')
           PY
