@@ -11,12 +11,12 @@ from strategy_engine import ema, atr, vwap, directional_values
 from polish_policy import ACCEPTANCE_CRITERIA
 
 IST = timezone(timedelta(hours=5, minutes=30))
-RESEARCH_EPOCH = 'FRESH_V3.2_2026-09-27'
-RESEARCH_TABLE = 'delta_research_signals_v32'
+RESEARCH_EPOCH = 'FRESH_V3.4_RECLAIM_2026-09-29'
+RESEARCH_TABLE = 'delta_research_signals_v34'
 
 
 class ResearchStore:
-    """Bounded V3.2 telemetry. Research can propose tests but never changes live rules."""
+    """Bounded V3.4 telemetry. Research can propose tests but never changes live rules."""
     def __init__(self):
         self.lock = threading.RLock()
         self.rows = deque(maxlen=300)
@@ -39,7 +39,7 @@ class ResearchStore:
                         mfe_pct DOUBLE PRECISION DEFAULT 0, mae_pct DOUBLE PRECISION DEFAULT 0,
                         mfe_r DOUBLE PRECISION DEFAULT 0, mae_r DOUBLE PRECISION DEFAULT 0,
                         updated_at TEXT NOT NULL)''')
-                logger.info('[RESEARCH] Fresh V3.2 PostgreSQL telemetry enabled; older epochs excluded')
+                logger.info('[RESEARCH] Fresh V3.4 PostgreSQL telemetry enabled; older epochs excluded')
         except Exception as exc:
             logger.warning('[RESEARCH] PostgreSQL unavailable; bounded RAM fallback: %s', exc)
             self.pg = False; self.conn = None
@@ -164,10 +164,10 @@ class ResearchStore:
             if na>=30 and nb>=30 and abs(ra-rb)>=8:
                 better=label_a if ra>rb else label_b
                 ideas.append(f'A/B {name}: {label_a} {ra}% n={na} vs {label_b} {rb}% n={nb}; candidate={better}')
-        compare('pattern',lambda r:r['features'].get('pattern')=='BREAKOUT','BREAKOUT',lambda r:r['features'].get('pattern')=='RETEST','RETEST')
-        compare('ADX',lambda r:float(r['features'].get('adx5') or 0)>=25,'ADX>=25',lambda r:22<=float(r['features'].get('adx5') or 0)<25,'ADX22-25')
-        compare('RVOL',lambda r:float(r['features'].get('rvol5') or 0)>=1.25,'RVOL>=1.25',lambda r:float(r['features'].get('rvol5') or 0)<1.25,'RVOL<1.25')
-        compare('spread',lambda r:float(r['features'].get('option_spread_pct') or 99)<=2,'spread<=2%',lambda r:2<float(r['features'].get('option_spread_pct') or 99)<=4,'spread2-4%')
+        compare('pattern',lambda r:r['features'].get('pattern')=='PULLBACK_RECLAIM','PULLBACK_RECLAIM',lambda r:r['features'].get('pattern')=='TREND_RESUME','TREND_RESUME')
+        compare('ADX',lambda r:float(r['features'].get('adx5') or 0)>=22,'ADX>=22',lambda r:11<=float(r['features'].get('adx5') or 0)<22,'ADX11-22')
+        compare('RVOL',lambda r:float(r['features'].get('rvol5') or 0)>=1.0,'RVOL>=1.0',lambda r:float(r['features'].get('rvol5') or 0)<1.0,'RVOL<1.0')
+        compare('spread',lambda r:float(r['features'].get('option_spread_pct') or 99)<=2,'spread<=2%',lambda r:2<float(r['features'].get('option_spread_pct') or 99)<=5,'spread2-5%')
         return ideas[:6]
 
     def summary(self):
@@ -227,7 +227,7 @@ class ResearchStore:
 
 
 class MarketReplay:
-    """Underlying-only V3.2 diagnostic. Historical option premium is never fabricated."""
+    """Underlying-only V3.4 diagnostic. Historical option premium is never fabricated."""
     @staticmethod
     def _features(rows):
         closes=[r['close'] for r in rows];px=closes[-1];e5,e9,e20=ema(closes,5),ema(closes,9),ema(closes,20)
