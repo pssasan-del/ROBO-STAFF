@@ -16,6 +16,7 @@ def install_live_review_controls(telegram_bot):
         rows = list(kb.get('keyboard') or [])
         label = '🤖 AUTO TRADE PREP ON' if live_review_gate.armed else '🤖 AUTO TRADE PREP OFF'
         rows.insert(max(0, len(rows)-1), [{'text': label}, {'text':'📋 READY TICKET'}])
+        rows.insert(max(0, len(rows)-1), [{'text':'✅ CONFIRM READY'}, {'text':'❌ REJECT READY'}])
         kb['keyboard'] = rows
         return kb
 
@@ -35,6 +36,12 @@ def install_live_review_controls(telegram_bot):
             return await telegram_bot.send(chat, msg, kb_with_live_review())
         if t in {'📋 ready ticket','ready ticket','auto prep status','📋 live ticket','live ticket','live review status'}:
             return await telegram_bot.send(chat, live_review_gate.status_text(), kb_with_live_review())
+        if t in {'✅ confirm ready','confirm ready','confirm trade','confirm ticket'}:
+            msg = await live_review_gate.confirm_latest()
+            return await telegram_bot.send(chat, msg, kb_with_live_review())
+        if t in {'❌ reject ready','reject ready','reject trade','reject ticket'}:
+            msg = await live_review_gate.reject_latest()
+            return await telegram_bot.send(chat, msg, kb_with_live_review())
         if t in {'clear ready ticket','clear live ticket','live clear','auto prep clear'}:
             msg = await live_review_gate.clear()
             return await telegram_bot.send(chat, msg, kb_with_live_review())
