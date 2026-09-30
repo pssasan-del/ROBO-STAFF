@@ -10,6 +10,12 @@ from delta_signal_engine import delta_auto_engine
 from master_mind_scalp import master_mind_scalp_engine
 from short_signal_formatter import format_short_signal
 from precision_overlay import install_precision_overlay
+from polish_policy import DAILY_SIGNAL_CAP
+
+# V4.1 signal-only mode: keep the frequency gate high enough that the engine
+# does not stop after the earlier 48-signal daily total. Master Mind remains
+# independent and untouched.
+DAILY_SIGNAL_CAP.update({'BTC':60,'ETH':60,'GOLD':40})
 
 async def heartbeat_loop():
     """Lightweight internal health heartbeat. It does not bypass Render sleep; it confirms recovery once the service is awake."""
@@ -37,6 +43,7 @@ async def lifespan(app:FastAPI):
     print(f" [GEMINI] {'configured' if settings.GEMINI_API_KEY else 'NOT SET'}")
     print(' [RECOVERY] Delta WS auto-reconnect + heartbeat: ENABLED')
     print(' [ROBO STAFF] V4.1 ACTIVE FLOW SCALP: ENABLED')
+    print(f' [ROBO STAFF] Daily caps: BTC {DAILY_SIGNAL_CAP["BTC"]} | ETH {DAILY_SIGNAL_CAP["ETH"]} | GOLD {DAILY_SIGNAL_CAP["GOLD"]}')
     print(' [MASTER MIND] BTCUSD + XAUTUSD (GOLD): ENABLED')
     print(' [CUSTOM STRATEGY ENGINE] PAUSED')
     print(' [PAPER/AUTO TRADE/LIVE EXECUTION] DISABLED')
@@ -52,8 +59,8 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-xaut-scalp'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] ALERTS ONLY started; V4.1 active-flow=%s master_mind_symbols=%s',
-                getattr(delta_auto_engine,'active_flow_overlay_installed',False),['BTCUSD','XAUTUSD'])
+    logger.info('[APP] ALERTS ONLY started; V4.1 active-flow=%s master_mind_symbols=%s daily_caps=%s',
+                getattr(delta_auto_engine,'active_flow_overlay_installed',False),['BTCUSD','XAUTUSD'],DAILY_SIGNAL_CAP)
     yield
     telegram_bot.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
@@ -76,6 +83,7 @@ def health():
         'delta_ws_reconnects':delta_market_service.reconnect_count,
         'active_flow_overlay':bool(getattr(delta_auto_engine,'active_flow_overlay_installed',False)),
         'robo_staff_v41_enabled':True,
+        'robo_staff_daily_signal_cap':dict(DAILY_SIGNAL_CAP),
         'master_mind_enabled':True,
         'master_mind_status':master_mind_scalp_engine.last_status,
         'master_mind_status_by_symbol':master_mind_scalp_engine.last_status_by_symbol,
