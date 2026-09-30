@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from config import settings,logger
 from delta_market_service import delta_market_service
 from delta_options_service import delta_options_service
+from delta_account_read import delta_account_read_service
 from strategy_store import strategy_store
 from strategy_engine import engine
 from bot import telegram_bot
@@ -13,6 +14,7 @@ from master_mind_scalp import master_mind_scalp_engine
 from short_signal_formatter import format_short_signal
 from precision_overlay import install_precision_overlay
 from quick_option_shortcuts import install_quick_option_shortcuts
+from balance_shortcut import install_balance_shortcut
 
 async def heartbeat_loop():
     """Lightweight internal health heartbeat. It does not bypass Render sleep; it confirms recovery once the service is awake."""
@@ -48,11 +50,13 @@ async def lifespan(app:FastAPI):
     print(' [ROBO STAFF] V4.1 active local-flow scalp: ENABLED')
     print(' [MASTER MIND] BTCUSD + XAUTUSD (GOLD) isolated scalp alerts: ENABLED')
     print(' [QUICK CHAIN] B=BTC | E=ETH | X=GOLD: ENABLED')
+    print(f" [BALANCE] Read-only private wallet fetch: {'ENABLED' if delta_account_read_service.configured else 'WAITING FOR API KEY'}")
     print(' [SAFETY] Auto-trading: DISABLED')
     print('='*58+'\n')
     engine.set_alert_callback(telegram_bot.alert)
     install_precision_overlay(delta_auto_engine)
     install_quick_option_shortcuts(market_agent)
+    install_balance_shortcut(telegram_bot)
     delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
     delta_auto_engine.format_signal=lambda c: format_short_signal(delta_auto_engine,c)
     master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)
@@ -64,14 +68,15 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-xaut-scalp'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] Delta-only crypto AI bot V9 started; V4.1 active-flow overlay=%s quick_chain=%s restored_active=%s',
+    logger.info('[APP] Delta-only crypto AI bot V9 started; V4.1 active-flow overlay=%s quick_chain=%s balance_button=%s restored_active=%s',
                 getattr(delta_auto_engine,'active_flow_overlay_installed',False),
-                getattr(market_agent,'quick_option_shortcuts_installed',False),restored)
+                getattr(market_agent,'quick_option_shortcuts_installed',False),
+                getattr(telegram_bot,'balance_shortcut_installed',False),restored)
     yield
     telegram_bot.running=False;engine.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
     await asyncio.gather(*tasks,return_exceptions=True)
-    await telegram_bot.client.aclose();await delta_market_service.close();await delta_options_service.client.aclose()
+    await telegram_bot.client.aclose();await delta_market_service.close();await delta_options_service.client.aclose();await delta_account_read_service.client.aclose()
 
 app=FastAPI(title='Delta Crypto AI Bot V9',lifespan=lifespan)
 @app.get('/')
@@ -91,6 +96,8 @@ def health():
         'active_flow_overlay':bool(getattr(delta_auto_engine,'active_flow_overlay_installed',False)),
         'quick_option_shortcuts':bool(getattr(market_agent,'quick_option_shortcuts_installed',False)),
         'quick_option_keys':['B','E','X'],
+        'balance_button':bool(getattr(telegram_bot,'balance_shortcut_installed',False)),
+        'delta_private_read_configured':delta_account_read_service.configured,
         'master_mind_status':master_mind_scalp_engine.last_status,
         'master_mind_status_by_symbol':master_mind_scalp_engine.last_status_by_symbol,
         'master_mind_symbols':['BTCUSD','XAUTUSD'],
