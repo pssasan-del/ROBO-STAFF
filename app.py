@@ -5,7 +5,6 @@ from config import settings,logger
 from delta_market_service import delta_market_service
 from delta_options_service import delta_options_service
 from strategy_store import strategy_store
-from strategy_engine import engine
 from bot import telegram_bot
 from delta_signal_engine import delta_auto_engine
 from master_mind_scalp import master_mind_scalp_engine
@@ -16,11 +15,10 @@ async def heartbeat_loop():
     """Lightweight internal health heartbeat. It does not bypass Render sleep; it confirms recovery once the service is awake."""
     while True:
         try:
-            active=len(strategy_store.list_active()) if strategy_store.conn else 0
             ws_age=(time.time()-delta_market_service.last_ws_message) if delta_market_service.last_ws_message else None
-            logger.info('[HEARTBEAT] app=alive delta_ws=%s ws_age=%s active_scanners=%s reconnects=%s',
+            logger.info('[HEARTBEAT] app=alive delta_ws=%s ws_age=%s reconnects=%s',
                         'connected' if delta_market_service.ws_connected else 'reconnecting/rest',
-                        f'{ws_age:.0f}s' if ws_age is not None else 'n/a', active, delta_market_service.reconnect_count)
+                        f'{ws_age:.0f}s' if ws_age is not None else 'n/a', delta_market_service.reconnect_count)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -30,24 +28,19 @@ async def heartbeat_loop():
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     strategy_store.init()
-    restored=len(strategy_store.list_active())
     print('\n'+'='*58)
-    print(' DELTA CRYPTO AI BOT V9 - ADVANCED INDICATORS')
+    print(' DELTA CRYPTO AI BOT V9 - ALERTS ONLY')
     print('='*58)
     print(' [DELTA] Public market data + options: NO API KEY REQUIRED')
     print(f' [SYMBOLS] {settings.delta_symbols()}')
     print(f" [TELEGRAM] {'configured' if settings.TELEGRAM_BOT_TOKEN else 'NOT SET'}")
     print(f" [GEMINI] {'configured' if settings.GEMINI_API_KEY else 'NOT SET'}")
-    print(f' [STRATEGIES] saved max={settings.MAX_SAVED_STRATEGIES} active max={settings.MAX_ACTIVE_STRATEGIES}')
-    print(f" [DATABASE] {'PostgreSQL persistent' if settings.DATABASE_URL else 'SQLite fallback (ephemeral on free Render)'}")
-    print(f' [RESTORE] {restored} previously-active scanner(s) will resume automatically')
-    print(' [UPLOAD] Telegram text/photo/PDF/TXT/MD/JSON strategy input: ENABLED')
     print(' [RECOVERY] Delta WS auto-reconnect + heartbeat: ENABLED')
-    print(' [ROBO STAFF] V4.1 active local-flow scalp: ENABLED')
-    print(' [MASTER MIND] BTCUSD + XAUTUSD (GOLD) isolated scalp alerts: ENABLED')
-    print(' [SAFETY] Auto-trading: DISABLED')
+    print(' [ROBO STAFF] V4.1 ACTIVE FLOW SCALP: ENABLED')
+    print(' [MASTER MIND] BTCUSD + XAUTUSD (GOLD): ENABLED')
+    print(' [CUSTOM STRATEGY ENGINE] PAUSED')
+    print(' [PAPER/AUTO TRADE/LIVE EXECUTION] DISABLED')
     print('='*58+'\n')
-    engine.set_alert_callback(telegram_bot.alert)
     install_precision_overlay(delta_auto_engine)
     delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
     delta_auto_engine.format_signal=lambda c: format_short_signal(delta_auto_engine,c)
@@ -55,22 +48,21 @@ async def lifespan(app:FastAPI):
     tasks=[
         asyncio.create_task(telegram_bot.poll(),name='telegram-poll'),
         asyncio.create_task(delta_market_service.websocket_loop(),name='delta-ws'),
-        asyncio.create_task(engine.loop(),name='strategy-engine'),
         asyncio.create_task(delta_auto_engine.loop(),name='delta-auto-signal-engine'),
         asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-xaut-scalp'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] Delta-only crypto AI bot V9 started; V4.1 active-flow overlay=%s restored_active=%s',
-                getattr(delta_auto_engine,'active_flow_overlay_installed',False),restored)
+    logger.info('[APP] ALERTS ONLY started; V4.1 active-flow=%s master_mind_symbols=%s',
+                getattr(delta_auto_engine,'active_flow_overlay_installed',False),['BTCUSD','XAUTUSD'])
     yield
-    telegram_bot.running=False;engine.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
+    telegram_bot.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
     await asyncio.gather(*tasks,return_exceptions=True)
     await telegram_bot.client.aclose();await delta_market_service.close();await delta_options_service.client.aclose()
 
 app=FastAPI(title='Delta Crypto AI Bot V9',lifespan=lifespan)
 @app.get('/')
-def root():return {'service':'Delta Crypto AI Bot V9','status':'online','mode':'signal-only','provider':'Delta Exchange India public APIs','timestamp':time.time()}
+def root():return {'service':'Delta Crypto AI Bot V9','status':'online','mode':'alerts-only-v41-plus-master-mind','provider':'Delta Exchange India public APIs','timestamp':time.time()}
 @app.head('/')
 def head():return None
 @app.get('/health')
@@ -78,19 +70,21 @@ def health():
     now=time.time()
     return {
         'status':'healthy',
+        'mode':'alerts-only-v41-plus-master-mind',
         'delta_ws':delta_market_service.ws_connected,
         'delta_ws_age_seconds':round(now-delta_market_service.last_ws_message,1) if delta_market_service.last_ws_message else None,
         'delta_ws_reconnects':delta_market_service.reconnect_count,
-        'engine_heartbeat_age_seconds':round(now-engine.last_loop_heartbeat,1) if engine.last_loop_heartbeat else None,
-        'last_scan_age_seconds':round(now-engine.last_scan_at,1) if engine.last_scan_at else None,
         'active_flow_overlay':bool(getattr(delta_auto_engine,'active_flow_overlay_installed',False)),
+        'robo_staff_v41_enabled':True,
+        'master_mind_enabled':True,
         'master_mind_status':master_mind_scalp_engine.last_status,
         'master_mind_status_by_symbol':master_mind_scalp_engine.last_status_by_symbol,
         'master_mind_symbols':['BTCUSD','XAUTUSD'],
         'master_mind_last_scan_age_seconds':round(now-master_mind_scalp_engine.last_scan_at,1) if master_mind_scalp_engine.last_scan_at else None,
-        'active_strategies':len(strategy_store.list_active()) if strategy_store.conn else 0,
-        'database':'postgresql' if strategy_store.pg else 'sqlite',
-        'photo_strategy_upload':True,
+        'custom_strategy_engine_running':False,
+        'paper_trading':False,
+        'auto_trade_prep':False,
+        'live_execution':False,
         'symbols':settings.delta_symbols(),
         'auto_trading':False
     }
