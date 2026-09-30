@@ -28,17 +28,12 @@ jobs:
               DAILY_RESEARCH_TARGET, BASE_COOLDOWN_MINUTES, evaluate_entry, contract_gate,
               quality_score, quality_label,
           )
-          from quick_option_shortcuts import SHORTCUTS
 
           assert POLISH_VERSION == 'FRESH_V4.1_ACTIVE_FLOW_SCALP_2026-09-30'
           assert MODE_REVISION == 'ACTIVE_LOCAL_FLOW_2026-09-30'
           assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (50,66,82)
           assert DAILY_RESEARCH_TARGET == 6
           assert BASE_COOLDOWN_MINUTES == 4
-          assert set(SHORTCUTS) == {'b','e','x'}
-          assert SHORTCUTS['b']['families'] == ('BTC',)
-          assert SHORTCUTS['e']['families'] == ('ETH',)
-          assert SHORTCUTS['x']['families'] == ('XAUT','PAXG')
 
           base={
               'symbol':'BTCUSD','direction':'MIXED','structure':'RANGE','pattern':'NONE',
@@ -88,6 +83,10 @@ jobs:
           assert 'V4.1 active local-flow scalp' in app
           assert "master_mind_symbols':['BTCUSD','XAUTUSD']" in app
           assert "quick_option_keys':['B','E','X']" in app
+          assert '"b": {"label": "BTC"' in quick
+          assert '"e": {"label": "ETH"' in quick
+          assert '"x": {"label": "GOLD"' in quick
+          assert '("XAUT", "PAXG")' in quick
           assert 'Premium = *best ask* when available, otherwise mark price.' in quick
           assert 'Read-only display; no order is placed.' in quick
 
