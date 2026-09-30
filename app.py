@@ -7,10 +7,12 @@ from delta_options_service import delta_options_service
 from strategy_store import strategy_store
 from strategy_engine import engine
 from bot import telegram_bot
+from market_agent import market_agent
 from delta_signal_engine import delta_auto_engine
 from master_mind_scalp import master_mind_scalp_engine
 from short_signal_formatter import format_short_signal
 from precision_overlay import install_precision_overlay
+from quick_option_shortcuts import install_quick_option_shortcuts
 
 async def heartbeat_loop():
     """Lightweight internal health heartbeat. It does not bypass Render sleep; it confirms recovery once the service is awake."""
@@ -45,10 +47,12 @@ async def lifespan(app:FastAPI):
     print(' [RECOVERY] Delta WS auto-reconnect + heartbeat: ENABLED')
     print(' [ROBO STAFF] V4.1 active local-flow scalp: ENABLED')
     print(' [MASTER MIND] BTCUSD + XAUTUSD (GOLD) isolated scalp alerts: ENABLED')
+    print(' [QUICK CHAIN] B=BTC | E=ETH | X=GOLD: ENABLED')
     print(' [SAFETY] Auto-trading: DISABLED')
     print('='*58+'\n')
     engine.set_alert_callback(telegram_bot.alert)
     install_precision_overlay(delta_auto_engine)
+    install_quick_option_shortcuts(market_agent)
     delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
     delta_auto_engine.format_signal=lambda c: format_short_signal(delta_auto_engine,c)
     master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)
@@ -60,8 +64,9 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-xaut-scalp'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] Delta-only crypto AI bot V9 started; V4.1 active-flow overlay=%s restored_active=%s',
-                getattr(delta_auto_engine,'active_flow_overlay_installed',False),restored)
+    logger.info('[APP] Delta-only crypto AI bot V9 started; V4.1 active-flow overlay=%s quick_chain=%s restored_active=%s',
+                getattr(delta_auto_engine,'active_flow_overlay_installed',False),
+                getattr(market_agent,'quick_option_shortcuts_installed',False),restored)
     yield
     telegram_bot.running=False;engine.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
@@ -84,6 +89,8 @@ def health():
         'engine_heartbeat_age_seconds':round(now-engine.last_loop_heartbeat,1) if engine.last_loop_heartbeat else None,
         'last_scan_age_seconds':round(now-engine.last_scan_at,1) if engine.last_scan_at else None,
         'active_flow_overlay':bool(getattr(delta_auto_engine,'active_flow_overlay_installed',False)),
+        'quick_option_shortcuts':bool(getattr(market_agent,'quick_option_shortcuts_installed',False)),
+        'quick_option_keys':['B','E','X'],
         'master_mind_status':master_mind_scalp_engine.last_status,
         'master_mind_status_by_symbol':master_mind_scalp_engine.last_status_by_symbol,
         'master_mind_symbols':['BTCUSD','XAUTUSD'],
