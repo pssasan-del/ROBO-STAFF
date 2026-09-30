@@ -19,6 +19,10 @@ class Settings:
     DELTA_REST_BASE: str = os.getenv('DELTA_REST_BASE','https://api.india.delta.exchange').rstrip('/')
     DELTA_PUBLIC_WS_URL: str = os.getenv('DELTA_PUBLIC_WS_URL','wss://public-socket.india.delta.exchange').strip()
     DELTA_SYMBOLS: str = os.getenv('DELTA_SYMBOLS','BTCUSD,ETHUSD,XAUTUSD').strip()
+    # Optional private credentials used only by the read-only balance button.
+    # Keep these in Render environment variables; never hard-code or send them in chat.
+    DELTA_API_KEY: str = os.getenv('DELTA_API_KEY','').strip()
+    DELTA_API_SECRET: str = os.getenv('DELTA_API_SECRET','').strip()
     DATABASE_URL: str = os.getenv('DATABASE_URL','').strip()
     SQLITE_PATH: str = os.getenv('SQLITE_PATH','data/strategies.db').strip()
     SCAN_INTERVAL_SECONDS: int = int(os.getenv('SCAN_INTERVAL_SECONDS','30'))
