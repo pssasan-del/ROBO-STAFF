@@ -18,6 +18,9 @@ from balance_shortcut import install_balance_shortcut
 from futures_paper_robo import futures_paper_robo
 from paper_robo_controls import install_paper_robo_controls
 from paper_robo_hook import install_paper_robo_hook
+from fo_asthra_paper import fo_asthra_paper
+from fo_asthra_controls import install_fo_asthra_controls
+from fo_asthra_hook import install_fo_asthra_hook
 
 async def heartbeat_loop():
     """Lightweight internal health heartbeat. It does not bypass Render sleep; it confirms recovery once the service is awake."""
@@ -25,10 +28,11 @@ async def heartbeat_loop():
         try:
             active=len(strategy_store.list_active()) if strategy_store.conn else 0
             ws_age=(time.time()-delta_market_service.last_ws_message) if delta_market_service.last_ws_message else None
-            logger.info('[HEARTBEAT] app=alive delta_ws=%s ws_age=%s active_scanners=%s reconnects=%s paper_robo=%s paper_positions=%s',
+            logger.info('[HEARTBEAT] app=alive delta_ws=%s ws_age=%s active_scanners=%s reconnects=%s paper_robo=%s paper_positions=%s asthra=%s asthra_positions=%s',
                         'connected' if delta_market_service.ws_connected else 'reconnecting/rest',
                         f'{ws_age:.0f}s' if ws_age is not None else 'n/a', active, delta_market_service.reconnect_count,
-                        'on' if futures_paper_robo.armed else 'off', len(futures_paper_robo.positions))
+                        'on' if futures_paper_robo.armed else 'off', len(futures_paper_robo.positions),
+                        'on' if fo_asthra_paper.armed else 'off', len(fo_asthra_paper.positions))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -56,6 +60,7 @@ async def lifespan(app:FastAPI):
     print(' [QUICK CHAIN] B=BTC | E=ETH | X=GOLD: ENABLED')
     print(f" [BALANCE] Read-only private wallet fetch: {'ENABLED' if delta_account_read_service.configured else 'WAITING FOR API KEY'}")
     print(' [FUTURES ROBO] PAPER ONLY: 84x sizing model | 10% available capital | restart default OFF')
+    print(' [F&O ASTHRA] OPTION BUY SHADOW/PAPER: 84x sizing model | 10% available capital | T1 trailing | restart default OFF')
     print(' [SAFETY] Exchange order submission: DISABLED')
     print('='*58+'\n')
     engine.set_alert_callback(telegram_bot.alert)
@@ -63,10 +68,13 @@ async def lifespan(app:FastAPI):
     install_quick_option_shortcuts(market_agent)
     install_balance_shortcut(telegram_bot)
     install_paper_robo_controls(telegram_bot)
+    install_fo_asthra_controls(telegram_bot)
     delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
     delta_auto_engine.format_signal=lambda c: format_short_signal(delta_auto_engine,c)
     futures_paper_robo.set_alert_callback(telegram_bot.broadcast)
+    fo_asthra_paper.set_alert_callback(telegram_bot.broadcast)
     install_paper_robo_hook(delta_auto_engine,futures_paper_robo)
+    install_fo_asthra_hook(delta_auto_engine,fo_asthra_paper)
     master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)
     tasks=[
         asyncio.create_task(telegram_bot.poll(),name='telegram-poll'),
@@ -75,22 +83,24 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(delta_auto_engine.loop(),name='delta-auto-signal-engine'),
         asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-xaut-scalp'),
         asyncio.create_task(futures_paper_robo.monitor_loop(),name='futures-paper-robo-monitor'),
+        asyncio.create_task(fo_asthra_paper.monitor_loop(),name='fo-asthra-paper-monitor'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] Delta-only crypto AI bot V9 started; V4.1 active-flow overlay=%s quick_chain=%s balance_button=%s paper_robo_controls=%s restored_active=%s',
+    logger.info('[APP] Delta crypto bot started; active_flow=%s quick_chain=%s balance=%s futures_paper=%s asthra=%s restored=%s',
                 getattr(delta_auto_engine,'active_flow_overlay_installed',False),
                 getattr(market_agent,'quick_option_shortcuts_installed',False),
                 getattr(telegram_bot,'balance_shortcut_installed',False),
-                getattr(telegram_bot,'paper_robo_controls_installed',False),restored)
+                getattr(telegram_bot,'paper_robo_controls_installed',False),
+                getattr(telegram_bot,'fo_asthra_controls_installed',False),restored)
     yield
-    telegram_bot.running=False;engine.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False;futures_paper_robo.running=False
+    telegram_bot.running=False;engine.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False;futures_paper_robo.running=False;fo_asthra_paper.running=False
     for t in tasks:t.cancel()
     await asyncio.gather(*tasks,return_exceptions=True)
     await telegram_bot.client.aclose();await delta_market_service.close();await delta_options_service.client.aclose();await delta_account_read_service.client.aclose();await futures_paper_robo.client.aclose()
 
 app=FastAPI(title='Delta Crypto AI Bot V9',lifespan=lifespan)
 @app.get('/')
-def root():return {'service':'Delta Crypto AI Bot V9','status':'online','mode':'signal-plus-futures-paper-robo','provider':'Delta Exchange India public/read-only APIs','timestamp':time.time()}
+def root():return {'service':'Delta Crypto AI Bot V9','status':'online','mode':'signal-plus-paper-execution','provider':'Delta Exchange India public/read-only APIs','timestamp':time.time()}
 @app.head('/')
 def head():return None
 @app.get('/health')
@@ -110,10 +120,17 @@ def health():
         'delta_private_read_configured':delta_account_read_service.configured,
         'paper_robo_controls':bool(getattr(telegram_bot,'paper_robo_controls_installed',False)),
         'paper_robo_armed':futures_paper_robo.armed,
-        'paper_robo_mode':'futures-only',
+        'paper_robo_mode':'futures-only-paper',
         'paper_robo_leverage_model':84,
         'paper_robo_allocation_pct':10,
         'paper_robo_open_positions':len(futures_paper_robo.positions),
+        'fo_asthra_controls':bool(getattr(telegram_bot,'fo_asthra_controls_installed',False)),
+        'fo_asthra_armed':fo_asthra_paper.armed,
+        'fo_asthra_mode':'option-buy-shadow-paper',
+        'fo_asthra_leverage_model':84,
+        'fo_asthra_allocation_pct':10,
+        'fo_asthra_t1_trailing':True,
+        'fo_asthra_open_positions':len(fo_asthra_paper.positions),
         'master_mind_status':master_mind_scalp_engine.last_status,
         'master_mind_status_by_symbol':master_mind_scalp_engine.last_status_by_symbol,
         'master_mind_symbols':['BTCUSD','XAUTUSD'],
