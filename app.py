@@ -31,7 +31,7 @@ async def heartbeat_loop():
         try:
             active=len(strategy_store.list_active()) if strategy_store.conn else 0
             ws_age=(time.time()-delta_market_service.last_ws_message) if delta_market_service.last_ws_message else None
-            logger.info('[HEARTBEAT] app=alive delta_ws=%s ws_age=%s active_scanners=%s reconnects=%s paper_robo=%s paper_positions=%s asthra=%s asthra_positions=%s live_review=%s live_tickets=%s',
+            logger.info('[HEARTBEAT] app=alive delta_ws=%s ws_age=%s active_scanners=%s reconnects=%s paper_robo=%s paper_positions=%s asthra=%s asthra_positions=%s auto_trade_prep=%s ready_tickets=%s',
                         'connected' if delta_market_service.ws_connected else 'reconnecting/rest',
                         f'{ws_age:.0f}s' if ws_age is not None else 'n/a', active, delta_market_service.reconnect_count,
                         'on' if futures_paper_robo.armed else 'off', len(futures_paper_robo.positions),
@@ -65,7 +65,7 @@ async def lifespan(app:FastAPI):
     print(f" [BALANCE] Read-only private wallet fetch: {'ENABLED' if delta_account_read_service.configured else 'WAITING FOR API KEY'}")
     print(' [FUTURES ROBO] PAPER ONLY: 84x sizing model | 10% available capital | restart default OFF')
     print(' [F&O ASTHRA] OPTION BUY SHADOW/PAPER: 84x sizing model | 10% available capital | T1 trailing | restart default OFF')
-    print(' [LIVE REVIEW] Manual real-market order ticket preparation: restart default OFF')
+    print(' [AUTO TRADE PREP] READY manual order tickets only while ON | restart default OFF')
     print(' [SAFETY] Exchange order submission: DISABLED')
     print('='*58+'\n')
     engine.set_alert_callback(telegram_bot.alert)
@@ -94,7 +94,7 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(fo_asthra_paper.monitor_loop(),name='fo-asthra-paper-monitor'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] Delta crypto bot started; active_flow=%s quick_chain=%s balance=%s futures_paper=%s asthra=%s live_review=%s restored=%s',
+    logger.info('[APP] Delta crypto bot started; active_flow=%s quick_chain=%s balance=%s futures_paper=%s asthra=%s auto_trade_prep=%s restored=%s',
                 getattr(delta_auto_engine,'active_flow_overlay_installed',False),
                 getattr(market_agent,'quick_option_shortcuts_installed',False),
                 getattr(telegram_bot,'balance_shortcut_installed',False),
@@ -109,7 +109,7 @@ async def lifespan(app:FastAPI):
 
 app=FastAPI(title='Delta Crypto AI Bot V9',lifespan=lifespan)
 @app.get('/')
-def root():return {'service':'Delta Crypto AI Bot V9','status':'online','mode':'signal-plus-paper-plus-live-review','provider':'Delta Exchange India public/read-only APIs','timestamp':time.time()}
+def root():return {'service':'Delta Crypto AI Bot V9','status':'online','mode':'signal-plus-paper-plus-manual-trade-prep','provider':'Delta Exchange India public/read-only APIs','timestamp':time.time()}
 @app.head('/')
 def head():return None
 @app.get('/health')
@@ -140,10 +140,11 @@ def health():
         'fo_asthra_allocation_pct':10,
         'fo_asthra_t1_trailing':True,
         'fo_asthra_open_positions':len(fo_asthra_paper.positions),
-        'live_review_controls':bool(getattr(telegram_bot,'live_review_controls_installed',False)),
-        'live_review_armed':live_review_gate.armed,
-        'live_review_tickets':len(live_review_gate.latest),
-        'live_review_exchange_order_submission':False,
+        'auto_trade_prep_controls':bool(getattr(telegram_bot,'live_review_controls_installed',False)),
+        'auto_trade_prep_armed':live_review_gate.armed,
+        'auto_trade_prep_restart_default':'OFF',
+        'auto_trade_prep_tickets':len(live_review_gate.latest),
+        'auto_trade_prep_exchange_order_submission':False,
         'master_mind_status':master_mind_scalp_engine.last_status,
         'master_mind_status_by_symbol':master_mind_scalp_engine.last_status_by_symbol,
         'master_mind_symbols':['BTCUSD','XAUTUSD'],
