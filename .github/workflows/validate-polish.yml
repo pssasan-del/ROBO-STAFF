@@ -16,7 +16,7 @@ jobs:
 
       - name: Python syntax compile
         run: |
-          python -m py_compile delta_signal_engine.py delta_options_service.py delta_account_read.py balance_shortcut.py polish_policy.py precision_overlay.py market_research.py performance_store.py short_signal_formatter.py quick_option_shortcuts.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
+          python -m py_compile delta_signal_engine.py delta_options_service.py delta_account_read.py balance_shortcut.py futures_paper_robo.py paper_robo_controls.py paper_robo_hook.py polish_policy.py precision_overlay.py market_research.py performance_store.py short_signal_formatter.py quick_option_shortcuts.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
 
       - name: Validate V4.1 and read-only helpers
         run: |
@@ -61,20 +61,28 @@ jobs:
           account=Path('delta_account_read.py').read_text()
           balance=Path('balance_shortcut.py').read_text()
           config=Path('config.py').read_text()
+          paper=Path('futures_paper_robo.py').read_text()
+          controls=Path('paper_robo_controls.py').read_text()
+          hook=Path('paper_robo_hook.py').read_text()
           assert '/v2/wallet/balances' in account
           assert '💰 Balance' in balance
           assert 'DELTA_API_KEY' in config and 'DELTA_API_SECRET' in config
           assert 'install_balance_shortcut' in app
-          assert 'auto_trading' in app and 'False' in app
           assert 'B=BTC' in app and 'E=ETH' in app and 'X=GOLD' in app
           assert 'best ask' in quick and 'no order is placed' in quick
+          assert 'LEVERAGE = 84' in paper and 'ALLOCATION_PCT = 0.10' in paper
+          assert 'Futures only' in paper or 'futures-only' in paper
+          assert '🤖 ROBO PAPER' in controls and 'PAPER KILL' in controls
+          assert 'startswith(\'⚡ *ROBO STAFF\')' in hook
+          assert "'exchange_order_submission':False" in app
 
           forbidden_trade=['/v2/orders','place_order(', 'modify_order(', 'cancel_order(', 'square_off(', '/orders/leverage']
-          for path in ('delta_account_read.py','balance_shortcut.py'):
+          for path in ('delta_account_read.py','balance_shortcut.py','futures_paper_robo.py','paper_robo_controls.py','paper_robo_hook.py'):
               text=Path(path).read_text()
               for needle in forbidden_trade:
                   assert needle not in text, (path,needle)
           print('FRESH_V41_ACTIVE_FLOW_SCALP_OK')
           print('QUICK_BEX_CHAIN_OK')
           print('READ_ONLY_BALANCE_OK')
+          print('FUTURES_PAPER_ROBO_OK')
           PY
