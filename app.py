@@ -43,7 +43,7 @@ async def lifespan(app:FastAPI):
     print(f' [RESTORE] {restored} previously-active scanner(s) will resume automatically')
     print(' [UPLOAD] Telegram text/photo/PDF/TXT/MD/JSON strategy input: ENABLED')
     print(' [RECOVERY] Delta WS auto-reconnect + heartbeat: ENABLED')
-    print(' [ROBO STAFF] V4 precision pullback/retest scalp: ENABLED')
+    print(' [ROBO STAFF] V4.1 active local-flow scalp: ENABLED')
     print(' [MASTER MIND] BTCUSD + XAUTUSD (GOLD) isolated scalp alerts: ENABLED')
     print(' [SAFETY] Auto-trading: DISABLED')
     print('='*58+'\n')
@@ -60,8 +60,8 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-xaut-scalp'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] Delta-only crypto AI bot V9 started; V4 precision overlay=%s restored_active=%s',
-                getattr(delta_auto_engine,'precision_overlay_installed',False),restored)
+    logger.info('[APP] Delta-only crypto AI bot V9 started; V4.1 active-flow overlay=%s restored_active=%s',
+                getattr(delta_auto_engine,'active_flow_overlay_installed',False),restored)
     yield
     telegram_bot.running=False;engine.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
@@ -83,7 +83,7 @@ def health():
         'delta_ws_reconnects':delta_market_service.reconnect_count,
         'engine_heartbeat_age_seconds':round(now-engine.last_loop_heartbeat,1) if engine.last_loop_heartbeat else None,
         'last_scan_age_seconds':round(now-engine.last_scan_at,1) if engine.last_scan_at else None,
-        'precision_overlay':bool(getattr(delta_auto_engine,'precision_overlay_installed',False)),
+        'active_flow_overlay':bool(getattr(delta_auto_engine,'active_flow_overlay_installed',False)),
         'master_mind_status':master_mind_scalp_engine.last_status,
         'master_mind_status_by_symbol':master_mind_scalp_engine.last_status_by_symbol,
         'master_mind_symbols':['BTCUSD','XAUTUSD'],
