@@ -31,12 +31,12 @@ async def heartbeat_loop():
         try:
             active=len(strategy_store.list_active()) if strategy_store.conn else 0
             ws_age=(time.time()-delta_market_service.last_ws_message) if delta_market_service.last_ws_message else None
-            logger.info('[HEARTBEAT] app=alive delta_ws=%s ws_age=%s active_scanners=%s reconnects=%s paper_robo=%s paper_positions=%s asthra=%s asthra_positions=%s auto_trade_prep=%s ready_tickets=%s',
+            logger.info('[HEARTBEAT] app=alive delta_ws=%s ws_age=%s active_scanners=%s reconnects=%s paper_robo=%s paper_positions=%s asthra=%s asthra_positions=%s auto_trade_prep=%s ready_tickets=%s confirmed_tickets=%s',
                         'connected' if delta_market_service.ws_connected else 'reconnecting/rest',
                         f'{ws_age:.0f}s' if ws_age is not None else 'n/a', active, delta_market_service.reconnect_count,
                         'on' if futures_paper_robo.armed else 'off', len(futures_paper_robo.positions),
                         'on' if fo_asthra_paper.armed else 'off', len(fo_asthra_paper.positions),
-                        'on' if live_review_gate.armed else 'off', len(live_review_gate.latest))
+                        'on' if live_review_gate.armed else 'off', len(live_review_gate.latest), len(live_review_gate.confirmed))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -65,7 +65,7 @@ async def lifespan(app:FastAPI):
     print(f" [BALANCE] Read-only private wallet fetch: {'ENABLED' if delta_account_read_service.configured else 'WAITING FOR API KEY'}")
     print(' [FUTURES ROBO] PAPER ONLY: 84x sizing model | 10% available capital | restart default OFF')
     print(' [F&O ASTHRA] OPTION BUY SHADOW/PAPER: 84x sizing model | 10% available capital | T1 trailing | restart default OFF')
-    print(' [AUTO TRADE PREP] READY manual order tickets only while ON | restart default OFF')
+    print(' [AUTO TRADE PREP] READY manual order tickets only while ON | explicit CONFIRM required | restart default OFF')
     print(' [SAFETY] Exchange order submission: DISABLED')
     print('='*58+'\n')
     engine.set_alert_callback(telegram_bot.alert)
@@ -144,6 +144,7 @@ def health():
         'auto_trade_prep_armed':live_review_gate.armed,
         'auto_trade_prep_restart_default':'OFF',
         'auto_trade_prep_tickets':len(live_review_gate.latest),
+        'auto_trade_prep_confirmed_tickets':len(live_review_gate.confirmed),
         'auto_trade_prep_exchange_order_submission':False,
         'master_mind_status':master_mind_scalp_engine.last_status,
         'master_mind_status_by_symbol':master_mind_scalp_engine.last_status_by_symbol,
