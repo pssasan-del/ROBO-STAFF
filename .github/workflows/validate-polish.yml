@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF Fresh V4 Precision Scalp
+name: Validate ROBO STAFF Fresh V4.1 Active Flow Scalp
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ jobs:
         run: |
           python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py precision_overlay.py market_research.py performance_store.py short_signal_formatter.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
 
-      - name: Validate V4 precision policy
+      - name: Validate V4.1 active-flow policy
         run: |
           python - <<'PY'
           from copy import deepcopy
@@ -26,72 +26,65 @@ jobs:
           from polish_policy import (
               POLISH_VERSION, MODE_REVISION, MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE,
               DAILY_RESEARCH_TARGET, BASE_COOLDOWN_MINUTES, evaluate_entry, contract_gate,
-              quality_score, quality_label, ACCEPTANCE_CRITERIA,
+              quality_score, quality_label,
           )
 
-          assert POLISH_VERSION == 'FRESH_V4.0_PRECISION_SCALP_2026-09-29'
-          assert MODE_REVISION == 'PRECISION_PULLBACK_RETEST_2026-09-29'
-          assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (76,84,92)
-          assert DAILY_RESEARCH_TARGET == 3
-          assert BASE_COOLDOWN_MINUTES == 12
-          assert ACCEPTANCE_CRITERIA['min_resolved'] == 50
-          assert ACCEPTANCE_CRITERIA['preferred_resolved'] == 100
+          assert POLISH_VERSION == 'FRESH_V4.1_ACTIVE_FLOW_SCALP_2026-09-30'
+          assert MODE_REVISION == 'ACTIVE_LOCAL_FLOW_2026-09-30'
+          assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (50,66,82)
+          assert DAILY_RESEARCH_TARGET == 6
+          assert BASE_COOLDOWN_MINUTES == 4
 
           base={
-              'symbol':'BTCUSD','direction':'MIXED','structure':'HH/HL','pattern':'NONE',
-              'setup_id':'BTCUSD:MIXED:NONE:123','daily_zone':'PIVOT_TO_R1','five_zone':'PIVOT_TO_R1',
-              'vwap_distance_atr':0.8,'ema9_distance_atr':0.45,'breakout_extension_atr':0.4,
-              'distance_to_next_pivot_atr':1.2,'one_min_breakout':True,
+              'symbol':'BTCUSD','direction':'MIXED','structure':'RANGE','pattern':'NONE',
+              'setup_id':'BTCUSD:MIXED:NONE:123','daily_zone':'S1_TO_PIVOT','five_zone':'PIVOT_TO_R1',
+              'vwap_distance_atr':1.0,'ema9_distance_atr':0.7,'breakout_extension_atr':0.5,
+              'distance_to_next_pivot_atr':0.2,'one_min_breakout':False,
               'tf':{
-                  '1m':{'price':101.0,'ema9':100.5,'ema20':100.0,'vwap':100.4,'plus_di':30,'minus_di':18,'rsi':58,'williams_r':-38,'adx':20,'rel_volume':1.0,'atr':0.5},
-                  '5m':{'price':101.0,'ema9':100.4,'ema20':99.8,'vwap':100.2,'plus_di':31,'minus_di':18,'rsi':57,'williams_r':-40,'adx':22,'rel_volume':0.9,'atr':1.0},
-                  '15m':{'price':101.0,'ema9':100.2,'ema20':99.7,'vwap':100.0,'plus_di':28,'minus_di':18,'rsi':56,'williams_r':-42,'adx':21,'rel_volume':0.9},
-                  '1h':{'price':100.8,'ema9':100.0,'ema20':99.5,'vwap':99.9,'plus_di':25,'minus_di':20,'adx':17,'rel_volume':0.8},
+                  '1m':{'price':101.0,'ema5':100.8,'ema9':100.5,'ema20':100.0,'vwap':100.6,'plus_di':24,'minus_di':21,'rsi':54,'williams_r':-48,'adx':12,'rel_volume':0.55,'atr':0.5},
+                  '5m':{'price':101.0,'ema5':100.7,'ema9':100.4,'ema20':100.0,'vwap':100.5,'plus_di':25,'minus_di':22,'rsi':53,'williams_r':-49,'adx':13,'rel_volume':0.50,'atr':1.0},
+                  '15m':{'price':100.2,'ema5':100.1,'ema9':100.2,'ema20':100.0,'vwap':100.2,'plus_di':20,'minus_di':20,'adx':15,'rel_volume':0.5},
+                  '1h':{'price':100.0,'ema5':100.0,'ema9':100.0,'ema20':100.0,'vwap':100.0,'plus_di':20,'minus_di':20,'adx':14,'rel_volume':0.4},
               },
           }
           s=deepcopy(base)
           ok,reason=evaluate_entry('BTC','SETUP',s)
           assert ok, reason
           assert s['direction']=='BULLISH'
-          assert s['pattern']=='PULLBACK_RECLAIM'
-          assert s['precision_mode'] is True
-          assert s['underlying_risk_atr'] >= .5
-          score=quality_score('BTC',s,8.0)
+          assert s['pattern'] in {'PULLBACK_FLOW','STRUCTURE_FLOW','MOMENTUM_FLOW','MICRO_FLOW','BREAKOUT_FLOW'}
+          score=quality_score('BTC',s,6.0)
           assert score >= MIN_ALERT_SCORE, score
 
-          # Hard veto: the failure class from the screenshot must never alert.
           bad=deepcopy(base)
-          bad['tf']['15m'].update({'price':99,'ema9':100,'ema20':100.5,'vwap':100.2,'plus_di':15,'minus_di':30})
+          for tf in ('15m','1h'):
+              bad['tf'][tf].update({'price':98,'ema5':98.5,'ema9':99,'ema20':100,'vwap':99.5,'plus_di':10,'minus_di':32,'adx':30})
           ok,reason=evaluate_entry('BTC','SETUP',bad)
-          assert not ok and '15m trend conflict' in reason
+          assert not ok and 'both strongly opposite' in reason
 
-          bad1h=deepcopy(base)
-          bad1h['tf']['1h'].update({'price':98,'ema9':99,'ema20':100,'vwap':99.5,'plus_di':14,'minus_di':32,'adx':25})
-          ok,reason=evaluate_entry('BTC','SETUP',bad1h)
-          assert not ok and 'strong 1h opposite trend' in reason
+          dead=deepcopy(base)
+          dead['tf']['5m']['adx']=4;dead['tf']['5m']['rel_volume']=0.1;dead['tf']['1m']['rel_volume']=0.1
+          ok,reason=evaluate_entry('BTC','SETUP',dead)
+          assert not ok and 'dead tape' in reason
 
-          assert contract_gate('BTC','OPTION BUY',entry=10.0,bid=9.9,ask=10.1,spot=80000,delta=.35,minutes_to_expiry=240,python_score=82)[0]
-          assert not contract_gate('BTC','OPTION SELL',entry=10.0,bid=9.9,ask=10.1,spot=80000,delta=.20,minutes_to_expiry=240,python_score=82)[0]
-          assert not contract_gate('BTC','OPTION BUY',entry=.01,bid=.01,ask=.02,spot=80000,delta=.35,minutes_to_expiry=240,python_score=95)[0]
-          assert quality_label(76)=='VALID' and quality_label(84)=='STRONG' and quality_label(92)=='ELITE'
+          assert contract_gate('BTC','OPTION BUY',entry=10.0,bid=9.8,ask=10.1,spot=80000,delta=.45,minutes_to_expiry=90,python_score=60)[0]
+          assert not contract_gate('BTC','OPTION BUY',entry=.01,bid=.01,ask=.02,spot=80000,delta=.45,minutes_to_expiry=90,python_score=90)[0]
+          assert quality_label(50)=='VALID' and quality_label(66)=='STRONG' and quality_label(82)=='ELITE'
 
           stats=Path('performance_store.py').read_text()
-          research=Path('market_research.py').read_text()
           overlay=Path('precision_overlay.py').read_text()
           formatter=Path('short_signal_formatter.py').read_text()
           app=Path('app.py').read_text()
-          assert "EPOCH='FRESH_V4.0_PRECISION_SCALP_2026-09-29'" in stats
-          assert "STATS_TABLE='delta_signal_stats_v40'" in stats
-          assert "RESEARCH_EPOCH = 'FRESH_V4.0_PRECISION_SCALP_2026-09-29'" in research
-          assert "RESEARCH_TABLE = 'delta_research_signals_v40'" in research
+          assert "EPOCH='FRESH_V4.1_ACTIVE_FLOW_SCALP_2026-09-30'" in stats
+          assert "STATS_TABLE='delta_signal_stats_v41'" in stats
           assert "return [('OPTION BUY', side, best)]" in overlay
-          assert '1.20, 1.85, 2.50' in overlay
-          assert 'ROBO STAFF — PRECISION SCALP' in formatter
-          assert 'install_precision_overlay(delta_auto_engine)' in app
+          assert '(1.00, 1.50, 2.00)' in overlay
+          assert 'ACTIVE FLOW SCALP' in formatter
+          assert 'V4.1 active local-flow scalp' in app
+          assert "master_mind_symbols':['BTCUSD','XAUTUSD']" in app
 
           forbidden=['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', 'DELTA_API_SECRET', 'DELTA_API_KEY']
           for path in ('delta_signal_engine.py','polish_policy.py','precision_overlay.py','short_signal_formatter.py'):
               text=Path(path).read_text()
               for needle in forbidden: assert needle not in text, (path,needle)
-          print('FRESH_V40_PRECISION_SCALP_OK')
+          print('FRESH_V41_ACTIVE_FLOW_SCALP_OK')
           PY
