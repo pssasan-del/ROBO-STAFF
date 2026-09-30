@@ -67,10 +67,14 @@ jobs:
           assert 'self.armed = False' in review
           assert 'if not self.armed' in review
           assert 'build_manual_ticket' in review and 'format_manual_ticket' in review
+          assert 'confirm_latest' in review and 'reject_latest' in review
+          assert 'READY TRADE CONFIRMED' in review
           assert 'AUTO TRADE PREP ON' in review_controls and 'AUTO TRADE PREP OFF' in review_controls
           assert 'READY TICKET' in review_controls
+          assert 'CONFIRM READY' in review_controls and 'REJECT READY' in review_controls
           assert "startswith('⚡ *ROBO STAFF')" in review_hook
           assert "'auto_trade_prep_restart_default':'OFF'" in app
+          assert "'auto_trade_prep_confirmed_tickets':len(live_review_gate.confirmed)" in app
           assert "'auto_trade_prep_exchange_order_submission':False" in app
           assert "'exchange_order_submission':False" in app
 
@@ -82,4 +86,5 @@ jobs:
           print('FRESH_V41_ACTIVE_FLOW_SCALP_OK')
           print('AUTO_TRADE_PREP_GATE_OK')
           print('READY_MANUAL_TICKET_OK')
+          print('EXPLICIT_CONFIRM_READY_OK')
           PY
