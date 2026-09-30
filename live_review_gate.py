@@ -1,46 +1,24 @@
-"""Human-controlled live trade review gate.
+"""Human-controlled manual trade-preparation gate.
 
-This module prepares a real-market order ticket from qualified ROBO STAFF signals
-but deliberately never submits, modifies, cancels, or closes an exchange order.
-It is the safe hand-off point for a human to review the exact contract, side,
-allocation and risk levels before acting in Delta manually.
+This gate is OFF after every restart/deploy. Only when the user turns it ON will
+qualified ROBO STAFF signals create a ready-to-submit manual ticket. It never
+submits, modifies, cancels or closes an exchange order.
 """
 from __future__ import annotations
 
-import math
 import time
-from dataclasses import dataclass
 
 from config import logger
 from delta_account_read import delta_account_read_service
+from delta_live_manual_ticket import ManualOrderTicket, build_manual_ticket, format_manual_ticket
 
-LEVERAGE_MODEL = 84
-ALLOCATION_PCT = 0.10
 USDINR = 85.0
-
-
-@dataclass
-class ReviewTicket:
-    underlying: str
-    action: str
-    contract: str
-    direction: str
-    entry: float
-    sl: float
-    t1: float
-    t2: float
-    t3: float
-    allocation: float
-    allocation_asset: str
-    model_buying_power_usd: float
-    created_at: float
-    setup_id: str
 
 
 class LiveReviewGate:
     def __init__(self):
-        self.armed = False
-        self.latest: dict[str, ReviewTicket] = {}
+        self.armed = False  # hard default: OFF after restart/deploy
+        self.latest: dict[str, ManualOrderTicket] = {}
         self.seen_setups: dict[str, float] = {}
         self.alert_cb = None
 
@@ -54,26 +32,26 @@ class LiveReviewGate:
     async def arm(self):
         self.armed = True
         return (
-            "🟠 *LIVE REVIEW GATE: ON*\n"
-            "Qualified ROBO STAFF signals will create manual order tickets.\n"
-            "🔒 No exchange order is submitted by this module."
+            "🤖 *AUTO TRADE PREP: ON*\n"
+            "Qualified ROBO STAFF signals will create READY manual order tickets.\n"
+            "10% current available capital • 84x sizing model • Entry/SL/T1/T2/T3.\n"
+            "🔒 Final exchange submit remains manual."
         )
 
     async def disarm(self):
         self.armed = False
-        return "🟠 *LIVE REVIEW GATE: OFF*\nNew live-review tickets are stopped."
+        return "🤖 *AUTO TRADE PREP: OFF*\nNew ready tickets are stopped. Existing stored tickets remain available."
 
     async def clear(self):
         self.armed = False
         n = len(self.latest)
         self.latest.clear()
-        return f"🧹 *LIVE REVIEW CLEARED*\nGate OFF • {n} stored ticket(s) cleared."
+        return f"🧹 *AUTO TRADE PREP CLEARED*\nGate OFF • {n} stored ticket(s) cleared."
 
     @staticmethod
     def _num(v, default=0.0):
         try:
-            x = float(v)
-            return x if math.isfinite(x) else default
+            return float(v) if v is not None else default
         except (TypeError, ValueError):
             return default
 
@@ -97,63 +75,44 @@ class LiveReviewGate:
         raise RuntimeError("No positive USD/INR available balance returned")
 
     async def on_signal(self, candidate):
+        # Critical safety gate: when OFF, absolutely nothing is prepared.
         if not self.armed:
             return
         setup_id = str(getattr(candidate, 'setup_id', '') or '')
         if not setup_id or setup_id in self.seen_setups:
             return
+
         underlying = str(getattr(candidate, 'underlying', '') or '').upper()
-        action = str(getattr(candidate, 'action', '') or '').upper()
-        contract = str(getattr(candidate, 'option_symbol', '') or '')
-        direction = str(getattr(candidate, 'direction', '') or '').upper()
-        if underlying not in {'BTC','ETH','GOLD'} or not contract or action not in {'OPTION BUY','OPTION SELL'}:
-            return
         self.seen_setups[setup_id] = time.time()
         try:
-            entry = self._num(getattr(candidate, 'premium', 0))
-            sl = self._num(getattr(candidate, 'sl', 0))
-            t1 = self._num(getattr(candidate, 't1', 0))
-            t2 = self._num(getattr(candidate, 't2', 0))
-            t3 = self._num(getattr(candidate, 't3', 0))
-            if min(entry, sl, t1, t2, t3) <= 0:
-                raise RuntimeError("signal levels incomplete")
             available_display, asset, available_usd = await self._available_capital()
-            allocation = available_display * ALLOCATION_PCT
-            model_bp = available_usd * ALLOCATION_PCT * LEVERAGE_MODEL
-            ticket = ReviewTicket(
-                underlying=underlying, action=action, contract=contract, direction=direction,
-                entry=entry, sl=sl, t1=t1, t2=t2, t3=t3,
-                allocation=allocation, allocation_asset=asset,
-                model_buying_power_usd=model_bp, created_at=time.time(), setup_id=setup_id,
+            ticket = build_manual_ticket(
+                candidate,
+                available_display=available_display,
+                asset=asset,
+                available_usd=available_usd,
             )
-            self.latest[underlying] = ticket
-            await self._alert(self.format_ticket(ticket))
+            self.latest[ticket.underlying] = ticket
+            await self._alert(format_manual_ticket(ticket))
         except Exception as exc:
-            logger.warning('[LIVE_REVIEW] %s skipped: %s', underlying, exc)
-            await self._alert(f"🟠 LIVE REVIEW SKIP — `{underlying}` | {exc}")
-
-    def format_ticket(self, t: ReviewTicket) -> str:
-        return (
-            "🟠 *LIVE TRADE REVIEW TICKET*\n"
-            f"{t.underlying} • *{t.action}* • `{t.contract}`\n"
-            f"Direction: *{t.direction}*\n"
-            f"Capital allocation: *{t.allocation:,.2f} {t.allocation_asset}* (10% available)\n"
-            f"84x sizing model buying power ≈ `${t.model_buying_power_usd:,.2f}`\n\n"
-            f"Entry: `{t.entry:.6g}` | SL: `{t.sl:.6g}`\n"
-            f"T1: `{t.t1:.6g}` | T2: `{t.t2:.6g}` | T3: `{t.t3:.6g}`\n\n"
-            "Review contract, quantity, margin, fees, liquidation and SL in Delta before acting.\n"
-            "🔒 *MANUAL REVIEW ONLY — NO ORDER SENT*"
-        )
+            logger.warning('[AUTO_TRADE_PREP] %s skipped: %s', underlying, exc)
+            await self._alert(f"🤖 AUTO TRADE PREP SKIP — `{underlying or 'UNKNOWN'}` | {exc}")
 
     def status_text(self):
-        rows = [f"🟠 *LIVE REVIEW GATE: {'ON' if self.armed else 'OFF'}*"]
+        rows = [
+            f"🤖 *AUTO TRADE PREP: {'ON' if self.armed else 'OFF'}*",
+            "Activation rule: READY tickets are created only while this switch is ON.",
+            "Restart/deploy default: OFF",
+        ]
         if not self.latest:
-            rows.append('Stored live-review tickets: 0')
+            rows.append('Stored ready tickets: 0')
         else:
-            rows.append(f'Stored live-review tickets: {len(self.latest)}')
+            rows.append(f'Stored ready tickets: {len(self.latest)}')
             for t in self.latest.values():
-                rows.append(f"• {t.underlying} {t.action} `{t.contract}` | Entry `{t.entry:.6g}` | SL `{t.sl:.6g}`")
-        rows.append('🔒 No exchange order endpoint is used.')
+                rows.append(
+                    f"• {t.underlying} {t.action} `{t.contract}` | Model units `{t.model_units}` | Entry `{t.entry:.6g}` | SL `{t.sl:.6g}`"
+                )
+        rows.append('🔒 Final exchange submit is manual; no order endpoint is used.')
         return '\n'.join(rows)
 
 
