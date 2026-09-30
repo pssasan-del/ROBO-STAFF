@@ -11,7 +11,9 @@ from delta_signal_engine import delta_auto_engine
 from performance_store import performance_store
 from entry_backtest import entry_backtester
 from market_research import research_store, market_replay
-from polish_policy import POLISH_VERSION, MIN_ALERT_SCORE, BASE_COOLDOWN_MINUTES
+from polish_policy import POLISH_VERSION, MIN_ALERT_SCORE, BASE_COOLDOWN_MINUTES, STRONG_SCORE
+from delta_live_trading import delta_live
+from delta_account_read import delta_account_read_service
 
 BASE='https://api.telegram.org/bot'
 
@@ -21,7 +23,8 @@ class TelegramBot:
         self.pending={}
     def auth(self,u):return not settings.allowed_user_ids() or u in settings.allowed_user_ids()
     def kb(self):
-        return {'keyboard':[[{'text':'🔥 Latest'},{'text':'📊 Daily'},{'text':'📅 Weekly'}],[{'text':'🌐 Data'},{'text':'💾 System'},{'text':'⚙️ Settings'}],[{'text':'🏠 Home'}]],'resize_keyboard':True,'is_persistent':True}
+        live = '🟢 LIVE' if delta_live.config.trading_enabled else '🔴 LIVE OFF'
+        return {'keyboard':[[{'text':'🔥 Latest'},{'text':'📊 Daily'},{'text':'📅 Weekly'}],[{'text':'🌐 Data'},{'text':'💾 System'},{'text':'⚙️ Settings'}],[{'text':'💰 Balance'},{'text': live},{'text':'🎫 Ticket'}],[{'text':'🏠 Home'}]],'resize_keyboard':True,'is_persistent':True}
     @staticmethod
     def inline(rows):return {'inline_keyboard':rows}
     @staticmethod
@@ -177,13 +180,87 @@ SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}""
                 if pend.get('mode')=='edit':strategy_store.replace(uid,int(pend['sid']),parsed,pend.get('source',''));sid=pend['sid'];txt=f'✅ Strategy #{sid} updated.'
                 else:sid=strategy_store.create(uid,parsed,pend.get('source',''));txt=f'✅ Strategy saved as #{sid}. It is OFF by default; start it from Saved Strategies.'
                 self.pending.pop(uid,None);await self.answer_callback(cqid,'Saved');await self.send(chat,txt,self.kb());return await self.strategy_page(uid,chat,0)
+            if data=='live_prep':
+                await self.answer_callback(cqid,'Building live ticket')
+                return await self._live_prepare(chat)
+            if data.startswith('live_confirm:'):
+                key=data.split(':',1)[1]
+                return await self._live_confirm(chat,cqid,key)
+            if data.startswith('live_cancel:'):
+                key=data.split(':',1)[1];delta_live.pop_confirm(key)
+                await self.answer_callback(cqid,'Cancelled');return await self.send(chat,'❌ Live order cancelled.',self.kb())
+            if data=='live_toggle':
+                if not settings.LIVE_TRADING_ENABLED:
+                    await self.answer_callback(cqid,'Env gate OFF')
+                    return await self.send(chat,'⛔ `LIVE_TRADING_ENABLED` is false in environment. Set it true on Render and restart.',self.kb())
+                delta_live.set_enabled(not delta_live.config.trading_enabled)
+                state='ON' if delta_live.config.trading_enabled else 'OFF'
+                await self.answer_callback(cqid,f'Live {state}')
+                return await self.send(chat,f'⚡ Runtime live trading gate: *{state}*\nEnv master switch still required.',self.kb())
         except ValueError as e:await self.answer_callback(cqid,str(e));await self.send(chat,f'⚠️ {e}')
         except Exception as e:logger.exception('[TELEGRAM] callback failed: %s',e);await self.answer_callback(cqid,'Failed safely')
+
+    async def _live_prepare(self, chat):
+        c = delta_auto_engine.last_signal
+        if not c:
+            return await self.send(chat, '🔥 No last signal to ticket. Wait for a V4.2 alert first.', self.kb())
+        if int(getattr(c, 'adjusted_score', getattr(c, 'score', 0)) or 0) < delta_live.config.min_score_for_live:
+            return await self.send(chat, f'⛔ Score below live minimum ({delta_live.config.min_score_for_live}).', self.kb())
+        try:
+            product_id = await delta_live.resolve_product_id(c.option_symbol)
+        except Exception as e:
+            return await self.send(chat, f'⚠️ product_id resolve failed: {e}', self.kb())
+        available_usd = 0.0
+        try:
+            if delta_account_read_service.configured:
+                rows = await delta_account_read_service.get_balances()
+                for row in rows:
+                    asset = str(row.get('asset_symbol') or row.get('symbol') or '').upper()
+                    if asset in {'USD', 'USDT', 'USDC', 'INR'}:
+                        available_usd = max(available_usd, float(row.get('available_balance') or 0))
+        except Exception:
+            pass
+        size = delta_live.size_from_balance(available_usd or 100.0, float(c.premium or 1))
+        req = delta_live.build_ticket_from_candidate(c, product_id=product_id, size=size, use_limit=True)
+        pf = delta_live.preflight(req, live_price=float((c.market or {}).get('ask') or c.premium), available_usd=available_usd)
+        key = f"lc{int(time.time())%1000000}"
+        delta_live.queue_confirm(key, {'req': req.__dict__, 'fp': pf.get('fingerprint')})
+        card = delta_live.format_confirm_card(req, pf)
+        rows = []
+        if pf.get('ok') and settings.LIVE_TRADING_ENABLED and delta_live.config.trading_enabled:
+            rows.append([{'text': '✅ CONFIRM LIVE ORDER', 'callback_data': f'live_confirm:{key}'}])
+        rows.append([{'text': '❌ Cancel', 'callback_data': f'live_cancel:{key}'}])
+        return await self.send(chat, card, self.inline(rows))
+
+    async def _live_confirm(self, chat, cqid, key):
+        payload = delta_live.pop_confirm(key)
+        if not payload:
+            await self.answer_callback(cqid, 'Expired')
+            return await self.send(chat, '⏱ Confirm expired. Prepare ticket again.', self.kb())
+        if not settings.LIVE_TRADING_ENABLED or not delta_live.config.trading_enabled:
+            await self.answer_callback(cqid, 'Live OFF')
+            return await self.send(chat, '⛔ Live trading is not armed.', self.kb())
+        from delta_live_trading import LiveOrderRequest
+        raw = payload.get('req') or {}
+        req = LiveOrderRequest(**{k: raw[k] for k in LiveOrderRequest.__dataclass_fields__ if k in raw})
+        pf = delta_live.preflight(req)
+        if not pf.get('ok'):
+            await self.answer_callback(cqid, 'Blocked')
+            return await self.send(chat, '⛔ Preflight blocked: ' + ', '.join(pf.get('reasons') or []), self.kb())
+        try:
+            result = await delta_live.place_order(req, fingerprint=pf.get('fingerprint', ''))
+            await self.answer_callback(cqid, 'Order sent')
+            oid = result.get('order_id') or ''
+            return await self.send(chat, f"✅ *LIVE ORDER SENT*\nOrder ID: `{oid}`\n`{req.symbol}` {req.side.upper()} x{req.size}\nType: {req.order_type}", self.kb())
+        except Exception as e:
+            await self.answer_callback(cqid, 'Failed')
+            return await self.send(chat, f'⚠️ Order failed: {e}', self.kb())
 
     async def process_text(self,uid,chat,text):
         t=text.lower().strip()
         if t in ['/start','start','help','🏠 home','home']:
-            return await self.send(chat,"""👋 *ROBO STAFF — DELTA V3.2*\n\nSignal-only engine is active in the background. No order execution.""",self.kb())
+            live_state = 'ARMED' if (settings.LIVE_TRADING_ENABLED and delta_live.config.trading_enabled) else 'DISARMED'
+            return await self.send(chat,f"""👋 *ROBO STAFF — DELTA V4.2 LIVE-READY*\n\nStrategy: `{POLISH_VERSION}`\nSignal engine: background active\nLive trading: *{live_state}* (confirm-required)\n\nUse 🎫 Ticket after a signal to prepare a live order.""",self.kb())
         if t in ['🔥 latest','latest','latest signal']:
             c=delta_auto_engine.last_signal;return await self.send(chat,delta_auto_engine.format_signal(c) if c else '🔥 No qualified Delta signal has been generated since this engine started.',self.kb())
         if t in ['📊 daily','daily','daily report']:
@@ -195,8 +272,8 @@ SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}""
             msg=f"""🌐 *DATA STATUS*\nDelta REST: 🟢 PUBLIC\nDelta WS: {'🟢 CONNECTED' if delta_market_service.ws_connected else '🟡 RECONNECTING / REST FALLBACK'}\nWS age: {f'{age:.0f}s' if age is not None else 'n/a'}\nReconnects: {delta_market_service.reconnect_count}\nSymbols: {', '.join(settings.delta_symbols())}\nLast auto scan: {f'{time.time()-delta_auto_engine.last_scan_at:.0f}s ago' if delta_auto_engine.last_scan_at else 'not yet'}"""
             return await self.send(chat,msg,self.kb())
         if t in ['💾 system','system','system status']:
-            msg=f"""💾 *SYSTEM STATUS*\nVersion: `{POLISH_VERSION}`\nDelta signal engine: {'🟢 RUNNING' if settings.DELTA_AUTO_SIGNAL_ENGINE and delta_auto_engine.running else '🔴 STOPPED'}\nAI confirmation: {'🟢 ENABLED' if settings.DELTA_AI_CONFIRMATION else '⚪ DISABLED'}\nGemini configured: {'🟢' if settings.GEMINI_API_KEY else '🔴'}\nGroq configured: {'🟢' if settings.GROQ_API_KEY else '🔴'}\nPending outcome checks: {len(delta_auto_engine.pending)}\nPost-SL recovery watches: {len(delta_auto_engine.post_sl)}\nScan errors: {delta_auto_engine.scan_errors}\nCandle cap/timeframe: {settings.DELTA_CANDLE_LIMIT}\nTrading: *DISABLED — SIGNAL ONLY*"""
-            return await self.send(chat,msg,self.kb())
+            msg=f"""💾 *SYSTEM STATUS*\nVersion: `{POLISH_VERSION}`\nDelta signal engine: {'🟢 RUNNING' if settings.DELTA_AUTO_SIGNAL_ENGINE and delta_auto_engine.running else '🔴 STOPPED'}\nAI confirmation: {'🟢 ENABLED' if settings.DELTA_AI_CONFIRMATION else '⚪ DISABLED'}\nGemini configured: {'🟢' if settings.GEMINI_API_KEY else '🔴'}\nGroq configured: {'🟢' if settings.GROQ_API_KEY else '🔴'}\nPending outcome checks: {len(delta_auto_engine.pending)}\nPost-SL recovery watches: {len(delta_auto_engine.post_sl)}\nScan errors: {delta_auto_engine.scan_errors}\nCandle cap/timeframe: {settings.DELTA_CANDLE_LIMIT}\nLive env gate: {'🟢 ON' if settings.LIVE_TRADING_ENABLED else '🔴 OFF'}\nLive runtime: {'🟢 ARMED' if delta_live.config.trading_enabled else '🔴 DISARMED'}\nCredentials: {'🟢' if delta_live.credentials_ok else '🔴 missing'}\nMin live score: {delta_live.config.min_score_for_live}"""
+            return await self.send(chat,msg,self.inline([[{'text':'🎫 Prepare Live Ticket','callback_data':'live_prep'},{'text':'⚡ Toggle Live','callback_data':'live_toggle'}]]))
         if t in ['⚙️ settings','settings']:
             msg=f"""⚙️ *DELTA SETTINGS — V3.2*\nAlways-on scan: {'ON' if settings.DELTA_AUTO_SIGNAL_ENGINE else 'OFF'}\nScan interval: {settings.DELTA_SIGNAL_SCAN_SECONDS}s\nHard minimum Python score: {MIN_ALERT_SCORE}\nAI confirmation: {'ON (non-blocking)' if settings.DELTA_AI_CONFIRMATION else 'OFF'}\nBase symbol/direction cooldown: {BASE_COOLDOWN_MINUTES}m\nMemory: bounded candle cache/research telemetry; no raw order-book persistence.\nExecution: DISABLED."""
             return await self.send(chat,msg,self.inline([[{'text':'🧪 Entry Backtest','callback_data':'entrybt'}],[{'text':'⏪ Market Replay','callback_data':'marketreplay'},{'text':'🔬 Research','callback_data':'research'}]]))
@@ -222,7 +299,21 @@ SL → later T1: {r.get('sl_later_t1',0)} | later T2: {r.get('sl_later_t2',0)}""
         if t in ['🔎 scan active now','scan now']:
             res=await engine.scan_once(uid);return await self.send(chat,'🔎 Active scan complete. '+('No active strategies.' if not res else ' | '.join(f"#{k}: {v.get('status')}" for k,v in res.items())),self.kb())
         if t in ['📊 status','status']:
-            return await self.send(chat,f"📊 *STATUS*\nDelta REST: 🟢 PUBLIC\nDelta WS: {'🟢' if delta_market_service.ws_connected else '🟡 reconnecting / REST fallback'}\nSaved: {strategy_store.count(uid)}/{settings.MAX_SAVED_STRATEGIES}\nActive: {strategy_store.active_count(uid)}/{settings.MAX_ACTIVE_STRATEGIES}\nGemini: {'🟢' if settings.GEMINI_API_KEY else '🔴'}\nAssets: BTC / ETH / GOLD (XAUT)\nMin R:R: 1:1.85 • adaptive V3.2 targets enabled\nPhoto intelligence: 🟢 strategy / option chain / position / chart\nHeartbeat/reconnect: 🟢\nAuto-trading: DISABLED",self.kb())
+            return await self.send(chat,f"📊 *STATUS*\nDelta REST: 🟢 PUBLIC\nDelta WS: {'🟢' if delta_market_service.ws_connected else '🟡 reconnecting / REST fallback'}\nSaved: {strategy_store.count(uid)}/{settings.MAX_SAVED_STRATEGIES}\nActive: {strategy_store.active_count(uid)}/{settings.MAX_ACTIVE_STRATEGIES}\nGemini: {'🟢' if settings.GEMINI_API_KEY else '🔴'}\nAssets: BTC / ETH / GOLD (XAUT)\nMin R:R: 1:1.85 • adaptive V3.2 targets enabled\nPhoto intelligence: 🟢 strategy / option chain / position / chart\nHeartbeat/reconnect: 🟢\nLive: {'ARMED' if delta_live.config.trading_enabled and settings.LIVE_TRADING_ENABLED else 'DISARMED'}",self.kb())
+        if t in ['💰 balance','balance']:
+            try:
+                txt=await delta_account_read_service.balance_text()
+            except Exception as e:
+                txt=f'⚠️ Balance fetch failed: {e}'
+            return await self.send(chat,txt,self.kb())
+        if t in ['🎫 ticket','ticket','prepare ticket','live ticket']:
+            return await self._live_prepare(chat)
+        if t in ['🔴 live off','🟢 live','live','live on','live off'] or t.startswith('🔴 live') or t.startswith('🟢 live'):
+            if not settings.LIVE_TRADING_ENABLED:
+                return await self.send(chat,'⛔ Set `LIVE_TRADING_ENABLED=true` in env and restart first.',self.kb())
+            delta_live.set_enabled(not delta_live.config.trading_enabled)
+            state='ARMED' if delta_live.config.trading_enabled else 'DISARMED'
+            return await self.send(chat,f'⚡ Live runtime gate: *{state}*',self.kb())
         pend=self.pending.get(uid) or {}
         if pend.get('mode') in {'create_wait','edit_wait'}:return await self.parse_text_strategy(uid,chat,text,pend.get('sid'))
         if t.startswith('strategy:') or t.startswith('strategy '):return await self.parse_text_strategy(uid,chat,text.split(':',1)[-1] if ':' in text else text)

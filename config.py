@@ -45,6 +45,15 @@ class Settings:
     DELTA_AI_MIN_SCORE: int = int(os.getenv('DELTA_AI_MIN_SCORE','82'))
     DELTA_SIGNAL_COOLDOWN_MINUTES: int = int(os.getenv('DELTA_SIGNAL_COOLDOWN_MINUTES','20'))
     DELTA_STATS_PATH: str = os.getenv('DELTA_STATS_PATH','data/delta_signal_stats.json').strip()
+    # Live trading — default OFF. Needs trading-scoped API key + Telegram confirm per order.
+    LIVE_TRADING_ENABLED: bool = os.getenv('LIVE_TRADING_ENABLED','false').lower() in {'1','true','yes','on'}
+    LIVE_MAX_CONTRACTS: int = int(os.getenv('LIVE_MAX_CONTRACTS','5'))
+    LIVE_MAX_ORDER_USD: float = float(os.getenv('LIVE_MAX_ORDER_USD','500'))
+    LIVE_MAX_OPEN: int = int(os.getenv('LIVE_MAX_OPEN','2'))
+    LIVE_MAX_DAILY_LOSS_USD: float = float(os.getenv('LIVE_MAX_DAILY_LOSS_USD','150'))
+    LIVE_MAX_SLIPPAGE_PCT: float = float(os.getenv('LIVE_MAX_SLIPPAGE_PCT','2.5'))
+    LIVE_ALLOCATION_PCT: float = float(os.getenv('LIVE_ALLOCATION_PCT','0.08'))
+    LIVE_MIN_SCORE: int = int(os.getenv('LIVE_MIN_SCORE','66'))
 
     def allowed_user_ids(self):
         out=[]

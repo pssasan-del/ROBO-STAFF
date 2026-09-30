@@ -1,50 +1,49 @@
-"""ROBO STAFF first Delta strategy — Fresh V4.1 ACTIVE FLOW SCALP.
+"""ROBO STAFF Delta strategy — Fresh V4.2 LIVE-READY SCALP.
 
-Purpose: restore usable signal frequency after the V4.0 precision epoch produced
-zero alerts. The engine remains research/signal-only. 1m + 5m local flow is the
-primary authority; 15m/1h/pivots/structure are context and score inputs rather
-than universal blockers. Only clearly dead tape, severe higher-timeframe conflict,
-extreme extension, or unusable option quotes are hard rejects.
-
-MASTER MIND remains separate and untouched. No order APIs are present.
+V4.2 tightens V4.1 for real-account use while keeping local-flow authority:
+- Higher minimum alert score (live money filter)
+- Tighter spread / premium / daily caps
+- Slightly longer cooldowns after fails
+- Live path is gated separately in delta_live_trading.py; this file only
+  decides signal quality. MASTER MIND remains separate and untouched.
 """
 from __future__ import annotations
 
 import math
 
-POLISH_VERSION = "FRESH_V4.1_ACTIVE_FLOW_SCALP_2026-09-30"
-MODE_REVISION = "ACTIVE_LOCAL_FLOW_2026-09-30"
-MIN_ALERT_SCORE = 50
-STRONG_SCORE = 66
-ELITE_SCORE = 82
-DAILY_RESEARCH_TARGET = 6
+POLISH_VERSION = "FRESH_V4.2_LIVE_READY_SCALP_2026-09-30"
+MODE_REVISION = "LIVE_READY_LOCAL_FLOW_2026-09-30"
+MIN_ALERT_SCORE = 58
+STRONG_SCORE = 70
+ELITE_SCORE = 84
+DAILY_RESEARCH_TARGET = 5
 
-SPREAD_CAP_PCT = {"BTC": 4.5, "ETH": 5.5, "GOLD": 7.5}
-DAILY_SIGNAL_CAP = {"BTC": 18, "ETH": 18, "GOLD": 12}
-PREMIUM_SPOT_CAP = {"BTC": 0.025, "ETH": 0.030, "GOLD": 0.035}
+SPREAD_CAP_PCT = {"BTC": 3.8, "ETH": 4.5, "GOLD": 6.5}
+DAILY_SIGNAL_CAP = {"BTC": 12, "ETH": 12, "GOLD": 8}
+PREMIUM_SPOT_CAP = {"BTC": 0.022, "ETH": 0.026, "GOLD": 0.030}
 
-BASE_COOLDOWN_MINUTES = 4
-SUCCESS_COOLDOWN_MINUTES = 3
-FAIL_COOLDOWN_MINUTES = 7
-CONTRACT_COOLDOWN_MINUTES = 6
-CORRELATION_WINDOW_MINUTES = 10
-CORRELATION_THRESHOLD = 0.94
+BASE_COOLDOWN_MINUTES = 5
+SUCCESS_COOLDOWN_MINUTES = 4
+FAIL_COOLDOWN_MINUTES = 9
+CONTRACT_COOLDOWN_MINUTES = 8
+CORRELATION_WINDOW_MINUTES = 12
+CORRELATION_THRESHOLD = 0.92
 
 ACCEPTANCE_CRITERIA = {
-    "min_resolved": 30,
-    "preferred_resolved": 60,
-    "min_calendar_days": 3,
-    "min_t1_success_pct": 45.0,
-    "min_profit_factor": 1.20,
-    "min_expectancy_r": 0.05,
-    "max_median_t1_minutes": 20.0,
-    "max_p75_t1_minutes": 35.0,
-    "max_fast_sl_pct": 30.0,
-    "max_sl_later_t1_pct": 20.0,
-    "max_stale_pct": 20.0,
-    "bucket_min_n": 10,
-    "bucket_min_win_pct": 40.0,
-    "bucket_min_pf": 1.00,
+    "min_resolved": 40,
+    "preferred_resolved": 80,
+    "min_calendar_days": 4,
+    "min_t1_success_pct": 48.0,
+    "min_profit_factor": 1.25,
+    "min_expectancy_r": 0.08,
+    "max_median_t1_minutes": 18.0,
+    "max_p75_t1_minutes": 30.0,
+    "max_fast_sl_pct": 25.0,
+    "max_sl_later_t1_pct": 18.0,
+    "max_stale_pct": 15.0,
+    "bucket_min_n": 12,
+    "bucket_min_win_pct": 42.0,
+    "bucket_min_pf": 1.05,
 }
 
 
