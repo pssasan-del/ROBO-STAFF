@@ -1,8 +1,9 @@
 """Human-controlled manual trade-preparation gate.
 
 This gate is OFF after every restart/deploy. Only when the user turns it ON will
-qualified ROBO STAFF signals create a ready-to-submit manual ticket. It never
-submits, modifies, cancels or closes an exchange order.
+qualified ROBO STAFF signals create a ready-to-submit manual ticket. A second
+explicit CONFIRM step marks the latest ticket as approved for MANUAL Delta submit.
+It never submits, modifies, cancels or closes an exchange order.
 """
 from __future__ import annotations
 
@@ -19,6 +20,9 @@ class LiveReviewGate:
     def __init__(self):
         self.armed = False  # hard default: OFF after restart/deploy
         self.latest: dict[str, ManualOrderTicket] = {}
+        self.confirmed: dict[str, ManualOrderTicket] = {}
+        self.confirmed_at: dict[str, float] = {}
+        self.last_underlying: str | None = None
         self.seen_setups: dict[str, float] = {}
         self.alert_cb = None
 
@@ -35,6 +39,7 @@ class LiveReviewGate:
             "🤖 *AUTO TRADE PREP: ON*\n"
             "Qualified ROBO STAFF signals will create READY manual order tickets.\n"
             "10% current available capital • 84x sizing model • Entry/SL/T1/T2/T3.\n"
+            "A separate ✅ CONFIRM button is required before the ticket is marked approved.\n"
             "🔒 Final exchange submit remains manual."
         )
 
@@ -46,7 +51,41 @@ class LiveReviewGate:
         self.armed = False
         n = len(self.latest)
         self.latest.clear()
+        self.confirmed.clear()
+        self.confirmed_at.clear()
+        self.last_underlying = None
         return f"🧹 *AUTO TRADE PREP CLEARED*\nGate OFF • {n} stored ticket(s) cleared."
+
+    async def confirm_latest(self):
+        """Explicit user confirmation for the newest prepared ticket.
+
+        This is intentionally an approval marker only. It does not call any Delta
+        trading endpoint. The user still performs the final submit manually.
+        """
+        u = self.last_underlying
+        if not u or u not in self.latest:
+            return "⚠️ *NO READY TICKET*\nWait for a qualified signal or open 📋 READY TICKET first."
+        t = self.latest[u]
+        self.confirmed[u] = t
+        self.confirmed_at[u] = time.time()
+        return (
+            "✅ *READY TRADE CONFIRMED*\n"
+            f"{t.underlying} • *{t.action}* • `{t.contract}`\n"
+            f"Model units: `{t.model_units}` | Allocation: *{t.allocation:,.2f} {t.allocation_asset}*\n"
+            f"Entry `{t.entry:.6g}` | SL `{t.sl:.6g}` | T1 `{t.t1:.6g}` | T2 `{t.t2:.6g}` | T3 `{t.t3:.6g}`\n\n"
+            "This confirms the ticket for your manual Delta submit.\n"
+            "🔒 *NO EXCHANGE ORDER WAS SENT*"
+        )
+
+    async def reject_latest(self):
+        u = self.last_underlying
+        if not u or u not in self.latest:
+            return "⚠️ *NO READY TICKET TO REJECT*"
+        t = self.latest.pop(u)
+        self.confirmed.pop(u, None)
+        self.confirmed_at.pop(u, None)
+        self.last_underlying = next(reversed(self.latest), None) if self.latest else None
+        return f"❌ *READY TRADE REJECTED*\n{t.underlying} • `{t.contract}` removed from ready tickets."
 
     @staticmethod
     def _num(v, default=0.0):
@@ -93,7 +132,13 @@ class LiveReviewGate:
                 available_usd=available_usd,
             )
             self.latest[ticket.underlying] = ticket
-            await self._alert(format_manual_ticket(ticket))
+            self.confirmed.pop(ticket.underlying, None)
+            self.confirmed_at.pop(ticket.underlying, None)
+            self.last_underlying = ticket.underlying
+            await self._alert(
+                format_manual_ticket(ticket)
+                + "\n\nPress ✅ *CONFIRM READY* only after checking the ticket."
+            )
         except Exception as exc:
             logger.warning('[AUTO_TRADE_PREP] %s skipped: %s', underlying, exc)
             await self._alert(f"🤖 AUTO TRADE PREP SKIP — `{underlying or 'UNKNOWN'}` | {exc}")
@@ -102,6 +147,7 @@ class LiveReviewGate:
         rows = [
             f"🤖 *AUTO TRADE PREP: {'ON' if self.armed else 'OFF'}*",
             "Activation rule: READY tickets are created only while this switch is ON.",
+            "Confirmation rule: newest READY ticket needs ✅ CONFIRM READY.",
             "Restart/deploy default: OFF",
         ]
         if not self.latest:
@@ -109,8 +155,9 @@ class LiveReviewGate:
         else:
             rows.append(f'Stored ready tickets: {len(self.latest)}')
             for t in self.latest.values():
+                mark = '✅ CONFIRMED' if t.underlying in self.confirmed else '⏳ NOT CONFIRMED'
                 rows.append(
-                    f"• {t.underlying} {t.action} `{t.contract}` | Model units `{t.model_units}` | Entry `{t.entry:.6g}` | SL `{t.sl:.6g}`"
+                    f"• {t.underlying} {t.action} `{t.contract}` | {mark} | Model units `{t.model_units}` | Entry `{t.entry:.6g}` | SL `{t.sl:.6g}`"
                 )
         rows.append('🔒 Final exchange submit is manual; no order endpoint is used.')
         return '\n'.join(rows)
