@@ -1,11 +1,9 @@
-"""Runtime overlay for ROBO STAFF V4 precision scalp.
+"""ROBO STAFF V4.1 ACTIVE FLOW runtime overlay.
 
-It intentionally changes only the FIRST Delta engine:
-- OPTION BUY only during this clean research epoch.
-- ATM/1-OTM/2-OTM contract search with stricter ranking.
-- Scalp-oriented target ladder: T1=1.20R, T2=1.85R, T3=2.50R.
-
-MASTER MIND is untouched. No order/execution APIs are present.
+The first Delta engine remains OPTION BUY only for clean signal research, but this
+overlay removes the V4.0 contract bottlenecks that could suppress otherwise valid
+local-flow scalps. ATM/near-ATM contracts are preferred; quote quality remains
+mandatory. MASTER MIND is separate and untouched. SIGNAL ONLY.
 """
 from __future__ import annotations
 
@@ -13,102 +11,107 @@ from types import MethodType
 
 from config import logger
 from delta_options_service import delta_options_service
+from polish_policy import SPREAD_CAP_PCT
+
+
+def _f(v, default=0.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def install_precision_overlay(engine):
-    async def _precision_option_candidates(self, symbol, direction, snap):
+    async def _active_option_candidates(self, symbol, direction, snap):
         und = self._underlying(symbol)
         rows = await (delta_options_service.get_chain('XAUT') if und == 'GOLD' else delta_options_service.get_chain(und))
-        parsed = []
-        for row in rows:
-            x = delta_options_service._snapshot(row)
-            if x.get('strike') and x.get('expiry'):
-                parsed.append(x)
+        parsed = [delta_options_service._snapshot(r) for r in rows]
+        parsed = [x for x in parsed if x.get('strike') and x.get('expiry')]
         if not parsed and und == 'GOLD':
             rows = await delta_options_service.get_chain('PAXG')
             parsed = [delta_options_service._snapshot(r) for r in rows]
+            parsed = [x for x in parsed if x.get('strike') and x.get('expiry')]
         if not parsed:
             return []
 
         expiries = sorted({x['expiry'] for x in parsed if x.get('expiry')})
-        expiry = next((e for e in expiries if (self._minutes_to_expiry(e, und) or -1) >= 120), None)
+        expiry = next((e for e in expiries if (self._minutes_to_expiry(e, und) or -1) >= 45), None)
         if not expiry:
             return []
-        parsed = [x for x in parsed if x.get('expiry') == expiry]
-        spot = next((float(x['spot_price']) for x in parsed if x.get('spot_price')), None)
-        if not spot:
+        pool = [x for x in parsed if x.get('expiry') == expiry]
+        spot = next((_f(x.get('spot_price')) for x in pool if _f(x.get('spot_price')) > 0), 0.0)
+        if spot <= 0:
             return []
-        strikes = sorted({float(x['strike']) for x in parsed if x.get('strike') is not None})
-        if not strikes:
-            return []
-        atm = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
 
         side = 'CE' if direction == 'BULLISH' else ('PE' if direction == 'BEARISH' else None)
         if not side:
             return []
+        side_pool = [x for x in pool if str(x.get('side') or '').upper() == side]
+        strikes = sorted({_f(x.get('strike')) for x in side_pool if _f(x.get('strike')) > 0})
+        if not strikes:
+            return []
+        atm = min(range(len(strikes)), key=lambda i: abs(strikes[i] - spot))
 
-        # Buying: prioritize ATM and 1 OTM for better delta / lower lottery behaviour.
-        indexed = []
-        for step in (0, 1, 2):
-            idx = atm + step if side == 'CE' else atm - step
+        # Include 1 ITM, ATM, 1 OTM and 2 OTM so active scalps are not starved by
+        # one bad quote at a single strike.
+        offsets = (-1, 0, 1, 2) if side == 'CE' else (1, 0, -1, -2)
+        wanted = []
+        for off in offsets:
+            idx = atm + off
             if 0 <= idx < len(strikes):
-                indexed.append((strikes[idx], step))
-        targets = {s: d for s, d in indexed}
-        pool = [x for x in parsed if x.get('side') == side and float(x.get('strike') or -1) in targets]
-        if not pool:
+                wanted.append((strikes[idx], off))
+        wanted_map = {s: off for s, off in wanted}
+        candidates = [x for x in side_pool if _f(x.get('strike')) in wanted_map]
+        if not candidates:
             return []
 
-        liqs = [float(x.get('volume') or 0) + 0.05 * float(x.get('oi') or 0) for x in pool]
-        max_liq = max(liqs) if liqs else 1.0
-        iv_values = []
-        theta_ratios = []
-        for x in [z for z in parsed if z.get('side') == side]:
-            if x.get('bid_iv') is not None and x.get('ask_iv') is not None:
-                iv_values.append((float(x['bid_iv']) + float(x['ask_iv'])) / 2.0)
-            elif x.get('bid_iv') is not None:
-                iv_values.append(float(x['bid_iv']))
-            elif x.get('ask_iv') is not None:
-                iv_values.append(float(x['ask_iv']))
-        for x in pool:
-            mid = (float(x['best_bid']) + float(x['best_ask'])) / 2 if x.get('best_bid') and x.get('best_ask') else 0
-            if x.get('theta') is not None and mid > 0:
-                theta_ratios.append(abs(float(x['theta'])) / mid)
-
+        liq_vals = [_f(x.get('volume')) + 0.05 * _f(x.get('oi')) for x in candidates]
+        max_liq = max(liq_vals or [1.0])
+        cap = SPREAD_CAP_PCT.get(und, 6.0)
         ranked = []
-        for x in pool:
-            y = self._contract_rank(
-                und, 'OPTION BUY', x,
-                distance=targets[float(x['strike'])],
-                max_liquidity=max_liq,
-                iv_values=iv_values,
-                theta_ratios=theta_ratios,
-            )
-            if not y:
+        for x in candidates:
+            bid, ask = _f(x.get('best_bid')), _f(x.get('best_ask'))
+            if bid <= 0 or ask <= bid:
                 continue
-            # Extra precision preference: executable delta 0.28-0.62 and rank >=72.
-            d = y.get('delta')
-            ad = abs(float(d)) if d is not None else None
-            if ad is not None and not (0.28 <= ad <= 0.62):
+            mid = (bid + ask) / 2.0
+            spread_pct = (ask - bid) / mid * 100.0 if mid > 0 else 999.0
+            if spread_pct > cap:
                 continue
-            if float(y.get('contract_rank_score') or 0) < 72:
+            d = x.get('delta')
+            ad = abs(_f(d, -1)) if d is not None else None
+            if ad is not None and ad >= 0 and not (0.12 <= ad <= 0.80):
                 continue
+
+            liquidity = _f(x.get('volume')) + 0.05 * _f(x.get('oi'))
+            spread_score = max(0.0, 100.0 * (1.0 - spread_pct / max(cap, 1e-9)))
+            liq_score = min(100.0, 100.0 * liquidity / max(max_liq, 1e-9))
+            delta_score = 65.0 if ad is None else max(0.0, 100.0 - abs(ad - 0.45) * 180.0)
+            off = wanted_map[_f(x.get('strike'))]
+            distance_score = {0: 100.0, 1: 88.0, -1: 82.0, 2: 72.0, -2: 68.0}.get(off, 55.0)
+            rank = 0.45 * spread_score + 0.25 * liq_score + 0.20 * delta_score + 0.10 * distance_score
+            if rank < 35:
+                continue
+            y = dict(x)
+            y['spread_pct'] = spread_pct
+            y['contract_rank_score'] = rank
+            y['otm_distance'] = off
             ranked.append(y)
 
         if not ranked:
             return []
-        ranked.sort(key=lambda z: (-float(z.get('contract_rank_score') or 0), float(z.get('spread_pct') or 99), int(z.get('otm_distance') or 9)))
+        ranked.sort(key=lambda z: (-_f(z.get('contract_rank_score')), _f(z.get('spread_pct'), 99)))
         best = ranked[0]
-        logger.info('[V4_CONTRACT] %s %s selected %s rank=%.1f spread=%.2f%% delta=%s',
-                    und, direction, best.get('symbol'), float(best.get('contract_rank_score') or 0),
-                    float(best.get('spread_pct') or 0), best.get('delta'))
+        logger.info('[V41_CONTRACT] %s %s selected %s rank=%.1f spread=%.2f%% delta=%s',
+                    und, direction, best.get('symbol'), _f(best.get('contract_rank_score')),
+                    _f(best.get('spread_pct')), best.get('delta'))
         return [('OPTION BUY', side, best)]
 
-    def _precision_targets(self, action, entry, spread_abs, tick_size, strong_extension):
-        # Wider than spread noise, but not the old fixed 12% rule.
-        risk_pct = max(0.15, 3.0 * spread_abs / max(entry, 1e-9), 6.0 * tick_size / max(entry, 1e-9))
+    def _active_targets(self, action, entry, spread_abs, tick_size, strong_extension):
+        # Give the option enough breathing room while keeping a scalp-size first target.
+        risk_pct = max(0.14, 2.0 * spread_abs / max(entry, 1e-9), 5.0 * tick_size / max(entry, 1e-9))
         risk_pct = min(0.24, risk_pct)
         risk = entry * risk_pct
-        rr1, rr2, rr3 = (1.30, 2.00, 2.70) if strong_extension else (1.20, 1.85, 2.50)
+        rr1, rr2, rr3 = (1.15, 1.70, 2.30) if strong_extension else (1.00, 1.50, 2.00)
         if action == 'OPTION BUY':
             sl = entry - risk
             t1 = entry + risk * rr1
@@ -121,8 +124,9 @@ def install_precision_overlay(engine):
             t3 = entry - risk * rr3
         return sl, t1, t2, t3, rr1, risk_pct, risk
 
-    engine._option_candidates = MethodType(_precision_option_candidates, engine)
-    engine._dynamic_targets = MethodType(_precision_targets, engine)
+    engine._option_candidates = MethodType(_active_option_candidates, engine)
+    engine._dynamic_targets = MethodType(_active_targets, engine)
     engine.precision_overlay_installed = True
-    logger.info('[V4_PRECISION] option BUY-only overlay installed; ATM/1OTM/2OTM ranking; T1 1.20R')
+    engine.active_flow_overlay_installed = True
+    logger.info('[V41_ACTIVE] option BUY overlay installed; near-ATM selection; T1 1.00R')
     return engine

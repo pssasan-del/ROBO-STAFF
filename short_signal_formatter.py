@@ -1,4 +1,4 @@
-"""Compact Telegram formatter for ROBO STAFF V4 precision scalp."""
+"""Compact Telegram formatter for ROBO STAFF V4.1 active-flow scalp."""
 
 
 def _fmt(v):
@@ -20,10 +20,9 @@ def format_short_signal(engine, c):
 
     labels=[]
     for item in passed:
-        if item=='RSI zone': labels.append(f"RSI {'bullish' if c.direction=='BULLISH' else 'bearish'}")
-        elif item=='Williams %R': labels.append(f"Williams %R {'bullish' if c.direction=='BULLISH' else 'bearish'}")
+        if item=='RSI supports': labels.append(f"RSI {'bullish' if c.direction=='BULLISH' else 'bearish'}")
+        elif item=='Williams %R supports': labels.append(f"Williams %R {'bullish' if c.direction=='BULLISH' else 'bearish'}")
         elif item=='5M pivot side': labels.append(f"5M Pivot {snap.get('five_zone','')}")
-        elif item=='Daily pivot side': labels.append(f"Daily Pivot {snap.get('daily_zone','')}")
         else: labels.append(item)
     labels=labels[:6]
     conf='\n'.join(f'• {x}' for x in labels)
@@ -32,7 +31,7 @@ def format_short_signal(engine, c):
     if c.ai_reason and c.ai_status!='NO-AI': ai+=f" — {c.ai_reason}"
 
     return (
-        '🎯 *ROBO STAFF — PRECISION SCALP*\n\n'
+        '⚡ *ROBO STAFF — ACTIVE FLOW SCALP*\n\n'
         f'{direction_icon} *{usym}* | *{c.action}* | *{c.quality}*\n'
         f'⭐ Score: *{c.score}/100* | {ai}\n'
         f'Contract: `{c.option_symbol}`\n'
@@ -45,6 +44,6 @@ def format_short_signal(engine, c):
         f'{conf}\n\n'
         f'15M `{s15.get("trend","MIXED")}` | 1H `{s1h.get("trend","MIXED")}`\n'
         f'1M RSI `{float(s1.get("rsi") or 0):.1f}` | 5M ADX `{float(s5.get("adx") or 0):.1f}` | RVOL `{float(s5.get("rel_volume") or 0):.2f}`\n'
-        f'Room `{float(snap.get("distance_to_next_pivot_atr") or 0):.2f} ATR` | Risk `{float(snap.get("underlying_risk_atr") or 0):.2f} ATR`\n'
+        f'Risk `{float(snap.get("underlying_risk_atr") or 0):.2f} ATR`\n'
         '📡 *SIGNAL ONLY — NO ORDER EXECUTED*'
     )
