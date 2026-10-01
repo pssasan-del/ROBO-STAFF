@@ -1,9 +1,9 @@
 """ROBO STAFF V4.1 ACTIVE FLOW runtime overlay.
 
-The first Delta engine remains OPTION BUY only for clean signal research, but this
-overlay removes the V4.0 contract bottlenecks that could suppress otherwise valid
-local-flow scalps. ATM/near-ATM contracts are preferred; quote quality remains
-mandatory. MASTER MIND is separate and untouched. SIGNAL ONLY.
+The first Delta engine remains OPTION BUY only for clean signal research. This
+overlay keeps the V4.1 active-flow entry logic and near-ATM contract selection,
+but upgrades the target model so the first profit target is at least 1.85R.
+MASTER MIND is separate and untouched. SIGNAL ONLY.
 """
 from __future__ import annotations
 
@@ -107,11 +107,13 @@ def install_precision_overlay(engine):
         return [('OPTION BUY', side, best)]
 
     def _active_targets(self, action, entry, spread_abs, tick_size, strong_extension):
-        # Give the option enough breathing room while keeping a scalp-size first target.
+        # Preserve the V4.1 stop-risk band, but require a materially better payoff.
+        # T1 is fixed at 1.85R so performance statistics are comparable across
+        # setups. Strong setups only extend T2/T3 farther; they do not change T1.
         risk_pct = max(0.14, 2.0 * spread_abs / max(entry, 1e-9), 5.0 * tick_size / max(entry, 1e-9))
         risk_pct = min(0.24, risk_pct)
         risk = entry * risk_pct
-        rr1, rr2, rr3 = (1.15, 1.70, 2.30) if strong_extension else (1.00, 1.50, 2.00)
+        rr1, rr2, rr3 = (1.85, 2.60, 3.40) if strong_extension else (1.85, 2.30, 3.00)
         if action == 'OPTION BUY':
             sl = entry - risk
             t1 = entry + risk * rr1
@@ -128,5 +130,6 @@ def install_precision_overlay(engine):
     engine._dynamic_targets = MethodType(_active_targets, engine)
     engine.precision_overlay_installed = True
     engine.active_flow_overlay_installed = True
-    logger.info('[V41_ACTIVE] option BUY overlay installed; near-ATM selection; T1 1.00R')
+    engine.active_flow_target_rr = 1.85
+    logger.info('[V41_ACTIVE] option BUY overlay installed; near-ATM selection; T1 1.85R, T2 2.30R+, T3 3.00R+')
     return engine

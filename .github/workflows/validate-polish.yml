@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF Fresh V4.1 Active Flow Scalp
+name: Validate ROBO STAFF V4.1 Active Flow RR1.85
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ jobs:
         run: |
           python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py precision_overlay.py market_research.py performance_store.py short_signal_formatter.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
 
-      - name: Validate V4.1 active-flow policy
+      - name: Validate V4.1 active-flow RR1.85 policy
         run: |
           python - <<'PY'
           from copy import deepcopy
@@ -74,17 +74,18 @@ jobs:
           overlay=Path('precision_overlay.py').read_text()
           formatter=Path('short_signal_formatter.py').read_text()
           app=Path('app.py').read_text()
-          assert "EPOCH='FRESH_V4.1_ACTIVE_FLOW_SCALP_2026-09-30'" in stats
-          assert "STATS_TABLE='delta_signal_stats_v41'" in stats
+          assert "EPOCH='FRESH_V4.1_ACTIVE_FLOW_RR185_2026-10-01'" in stats
+          assert "STATS_TABLE='delta_signal_stats_v41_rr185'" in stats
           assert "return [('OPTION BUY', side, best)]" in overlay
-          assert '(1.00, 1.50, 2.00)' in overlay
+          assert '(1.85, 2.30, 3.00)' in overlay
+          assert 'engine.active_flow_target_rr = 1.85' in overlay
           assert 'ACTIVE FLOW SCALP' in formatter
-          assert 'V4.1 active local-flow scalp' in app
+          assert 'V4.1 ACTIVE FLOW SCALP' in app
           assert "master_mind_symbols':['BTCUSD','XAUTUSD']" in app
 
           forbidden=['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', 'DELTA_API_SECRET', 'DELTA_API_KEY']
           for path in ('delta_signal_engine.py','polish_policy.py','precision_overlay.py','short_signal_formatter.py'):
               text=Path(path).read_text()
               for needle in forbidden: assert needle not in text, (path,needle)
-          print('FRESH_V41_ACTIVE_FLOW_SCALP_OK')
+          print('FRESH_V41_ACTIVE_FLOW_RR185_OK')
           PY
