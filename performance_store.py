@@ -8,14 +8,15 @@ BASE_KEYS=(
     'buy_success','buy_failed','sell_success','sell_failed',
     'ai_confirmed','no_ai_confirmation','sl_later_t1','sl_later_t2'
 )
-STATS_TABLE='delta_signal_stats_v42_premium_oi_rr185'
-EPOCH='FRESH_V4.2_PREMIUM_OI_RR185_2026-10-01'
+EDGE_KEYS=('edge_samples','edge_gross_r_sum','edge_net_r_sum','edge_break_even_pct_sum','edge_gross_cost_multiple_sum')
+STATS_TABLE='delta_signal_stats_v43_professional_scalp'
+EPOCH='FRESH_V4.3_COST_TIMING_OI_RR185_2026-10-01'
 
 
 class PerformanceStore:
-    """Fresh V4.2 premium/OI confirmed 1.85R aggregate statistics."""
+    """Fresh V4.3 cost/timing/OI confirmed 1.85R aggregate statistics."""
     def __init__(self,path=None):
-        self.path=(path or settings.DELTA_STATS_PATH)+'.v42_premium_oi_rr185';self.lock=threading.RLock();self.data={'days':{}}
+        self.path=(path or settings.DELTA_STATS_PATH)+'.v43_professional_scalp';self.lock=threading.RLock();self.data={'days':{}}
         self.pg=False;self.conn=None;self._init_persistent();self._load();self._prune()
 
     def _init_persistent(self):
@@ -24,7 +25,7 @@ class PerformanceStore:
                 import psycopg
                 self.conn=psycopg.connect(settings.DATABASE_URL,autocommit=True);self.pg=True
                 with self.conn.cursor() as cur:cur.execute(f'''CREATE TABLE IF NOT EXISTS {STATS_TABLE}(day TEXT PRIMARY KEY,payload_json TEXT NOT NULL,updated_at TEXT NOT NULL)''')
-                logger.info('[DELTA_STATS] Fresh V4.2 premium/OI RR1.85 PostgreSQL aggregate persistence enabled')
+                logger.info('[DELTA_STATS] Fresh V4.3 professional scalp PostgreSQL aggregate persistence enabled')
         except Exception as e:
             logger.warning('[DELTA_STATS] PostgreSQL unavailable; file fallback: %s',e);self.conn=None;self.pg=False
 
@@ -65,6 +66,7 @@ class PerformanceStore:
     def _bucket(self,day=None):
         key=day or datetime.now(IST).date().isoformat();d=self.data.setdefault('days',{}).setdefault(key,{})
         for k in BASE_KEYS:d.setdefault(k,0)
+        for k in EDGE_KEYS:d.setdefault(k,0.0)
         d.setdefault('assets',{});d.setdefault('ai',{});d.setdefault('actions',{})
         d.setdefault('timing',{'sl_under_5m':0,'sl_5_15m':0,'sl_over_15m':0,'t1_under_5m':0,'t1_5_15m':0,'t1_over_15m':0})
         return key,d
@@ -78,6 +80,14 @@ class PerformanceStore:
             key,d=self._bucket();d['total']+=1;d['unresolved']+=1
             d['ai_confirmed' if self._ai_group(ai_status)=='confirm' else 'no_ai_confirmation']+=1
             self._pair(d['actions'],action)['signals']+=1;self._pair(d['assets'],underlying)['signals']+=1;self._pair(d['ai'],self._ai_group(ai_status))['signals']+=1
+            self._save_day(key)
+
+    def record_edge_estimate(self,gross_r,net_r,break_even_pct,gross_cost_multiple):
+        """Record economics for an alert that was actually formatted/emitted."""
+        with self.lock:
+            key,d=self._bucket();d['edge_samples']+=1
+            d['edge_gross_r_sum']+=float(gross_r or 0);d['edge_net_r_sum']+=float(net_r or 0)
+            d['edge_break_even_pct_sum']+=float(break_even_pct or 0);d['edge_gross_cost_multiple_sum']+=float(gross_cost_multiple or 0)
             self._save_day(key)
 
     def resolve(self,action,success,underlying='UNKNOWN',ai_status='',elapsed_seconds=None):
@@ -109,16 +119,22 @@ class PerformanceStore:
     def report(self,days=1):
         with self.lock:
             today=datetime.now(IST).date();keys=[(today-timedelta(days=i)).isoformat() for i in range(days)]
-            out={k:0 for k in BASE_KEYS};out.update({'assets':{},'ai':{},'actions':{},'timing':{},'epoch':EPOCH})
+            out={k:0 for k in BASE_KEYS};out.update({k:0.0 for k in EDGE_KEYS});out.update({'assets':{},'ai':{},'actions':{},'timing':{},'epoch':EPOCH})
             for day in keys:
                 src=self.data.get('days',{}).get(day,{})
                 for k in BASE_KEYS:out[k]+=int(src.get(k,0))
+                for k in EDGE_KEYS:out[k]+=float(src.get(k,0) or 0)
                 for group in ('assets','ai','actions'):
                     for name,p in src.get(group,{}).items():
                         q=self._pair(out[group],name)
                         for metric in ('signals','success','failed','stale','invalidated'):q[metric]+=int(p.get(metric,0))
                 for k,v in src.get('timing',{}).items():out['timing'][k]=out['timing'].get(k,0)+int(v)
             resolved=out['success']+out['failed'];out['success_rate']=round(out['success']*100/resolved,1) if resolved else 0.0
+            n=max(0.0,out['edge_samples'])
+            out['avg_est_gross_r']=round(out['edge_gross_r_sum']/n,2) if n else 0.0
+            out['avg_est_net_r']=round(out['edge_net_r_sum']/n,2) if n else 0.0
+            out['avg_est_break_even_pct']=round(out['edge_break_even_pct_sum']/n,2) if n else 0.0
+            out['avg_gross_cost_multiple']=round(out['edge_gross_cost_multiple_sum']/n,2) if n else 0.0
             return out
 
 
