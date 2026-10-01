@@ -13,10 +13,7 @@ from __future__ import annotations
 
 from types import MethodType
 
-import delta_signal_engine as signal_module
-from config import logger
 from polish_policy import evaluate_entry as base_evaluate_entry
-from strategy_engine import ema
 
 
 def _f(v, default=0.0):
@@ -24,6 +21,17 @@ def _f(v, default=0.0):
         return float(v)
     except (TypeError, ValueError):
         return default
+
+
+def _ema(values, period):
+    vals = [float(x) for x in values]
+    if not vals:
+        return 0.0
+    alpha = 2.0 / (float(period) + 1.0)
+    out = vals[0]
+    for value in vals[1:]:
+        out = alpha * value + (1.0 - alpha) * out
+    return out
 
 
 def _side_of(value, level, eps=1e-12):
@@ -48,8 +56,8 @@ def _cross_9_18(rows, lookback=3):
             break
         now = closes[:end]
         prev = closes[:end - 1]
-        e9, e18 = ema(now, 9), ema(now, 18)
-        p9, p18 = ema(prev, 9), ema(prev, 18)
+        e9, e18 = _ema(now, 9), _ema(now, 18)
+        p9, p18 = _ema(prev, 9), _ema(prev, 18)
         if p9 <= p18 and e9 > e18:
             return {'side': 'BULLISH', 'bars_ago': bars_ago}
         if p9 >= p18 and e9 < e18:
@@ -58,6 +66,10 @@ def _cross_9_18(rows, lookback=3):
 
 
 def install_active_flow_indicator_overlay(engine):
+    # Runtime-only imports keep helper tests independent from optional app deps.
+    import delta_signal_engine as signal_module
+    from config import logger
+
     original_tf_state = engine._tf_state
     original_cross_5_9 = engine._ema_cross_5m
     original_snapshot = engine._snapshot
@@ -65,7 +77,7 @@ def install_active_flow_indicator_overlay(engine):
     def _tf_state_with_ema18(self, rows):
         state = dict(original_tf_state(rows))
         closes = [float(x['close']) for x in rows]
-        e18 = ema(closes, 18)
+        e18 = _ema(closes, 18)
         state['ema18'] = e18
         px = _f(state.get('price'))
         e5 = _f(state.get('ema5'))
