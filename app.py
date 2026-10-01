@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from config import settings,logger
 from delta_market_service import delta_market_service
 from delta_options_service import delta_options_service
+from option_premium_history_service import option_premium_history_service
 from strategy_store import strategy_store
 from bot import telegram_bot
 from delta_signal_engine import delta_auto_engine
@@ -13,9 +14,8 @@ from precision_overlay import install_precision_overlay
 from active_flow_indicator_overlay import install_active_flow_indicator_overlay
 from polish_policy import DAILY_SIGNAL_CAP
 
-# V4.1 signal-only mode: keep the frequency gate high enough that the engine
-# does not stop after the earlier 48-signal daily total. Master Mind remains
-# independent and untouched.
+# Signal-only mode: keep the frequency gate high enough that the engine does not
+# stop after the earlier 48-signal daily total. Master Mind remains independent.
 DAILY_SIGNAL_CAP.update({'BTC':60,'ETH':60,'GOLD':40})
 
 async def heartbeat_loop():
@@ -43,11 +43,14 @@ async def lifespan(app:FastAPI):
     print(f" [TELEGRAM] {'configured' if settings.TELEGRAM_BOT_TOKEN else 'NOT SET'}")
     print(f" [GEMINI] {'configured' if settings.GEMINI_API_KEY else 'NOT SET'}")
     print(' [RECOVERY] Delta WS auto-reconnect + heartbeat: ENABLED')
-    print(' [ROBO STAFF] V4.1 ACTIVE FLOW SCALP: ENABLED')
-    print(' [ROBO STAFF] 5M EMA5 candle check + EMA9/18 + RSI/W%R + Fib P/R1/S1: ENABLED')
+    print(' [ROBO STAFF] V4.2 ACTIVE FLOW — PREMIUM + OI CONFIRMATION: ENABLED')
+    print(' [ROBO STAFF] Underlying 5M EMA5 + EMA9/18 + RSI/W%R + Fib P/R1/S1: ENABLED')
+    print(' [ROBO STAFF] Option premium 5M EMA5 gate + EMA9/18/RSI/W%R/structure score: ENABLED')
+    print(' [ROBO STAFF] Option OI history + nearby strike OI/liquidity score: ENABLED')
     print(' [ROBO STAFF] Daily Fib P/R1/S1: CONTEXT ONLY')
+    print(' [ROBO STAFF] T1 target: 1.85R')
     print(f' [ROBO STAFF] Daily caps: BTC {DAILY_SIGNAL_CAP["BTC"]} | ETH {DAILY_SIGNAL_CAP["ETH"]} | GOLD {DAILY_SIGNAL_CAP["GOLD"]}')
-    print(' [MASTER MIND] BTCUSD + XAUTUSD (GOLD): ENABLED')
+    print(' [MASTER MIND] BTCUSD + XAUTUSD (GOLD): ENABLED / UNCHANGED')
     print(' [CUSTOM STRATEGY ENGINE] PAUSED')
     print(' [PAPER/AUTO TRADE/LIVE EXECUTION] DISABLED')
     print('='*58+'\n')
@@ -63,19 +66,20 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-xaut-scalp'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] ALERTS ONLY started; V4.1 active-flow=%s requested_indicators=%s master_mind_symbols=%s daily_caps=%s',
+    logger.info('[APP] ALERTS ONLY started; V4.2 active-flow=%s indicators=%s premium_oi=%s master_mind_symbols=%s daily_caps=%s',
                 getattr(delta_auto_engine,'active_flow_overlay_installed',False),
                 getattr(delta_auto_engine,'requested_indicator_overlay_installed',False),
+                getattr(delta_auto_engine,'premium_oi_overlay_installed',False),
                 ['BTCUSD','XAUTUSD'],DAILY_SIGNAL_CAP)
     yield
     telegram_bot.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
     await asyncio.gather(*tasks,return_exceptions=True)
-    await telegram_bot.client.aclose();await delta_market_service.close();await delta_options_service.client.aclose()
+    await telegram_bot.client.aclose();await delta_market_service.close();await delta_options_service.client.aclose();await option_premium_history_service.close()
 
 app=FastAPI(title='Delta Crypto AI Bot V9',lifespan=lifespan)
 @app.get('/')
-def root():return {'service':'Delta Crypto AI Bot V9','status':'online','mode':'alerts-only-v41-ema5-ema918-fib-plus-master-mind','provider':'Delta Exchange India public APIs','timestamp':time.time()}
+def root():return {'service':'Delta Crypto AI Bot V9','status':'online','mode':'alerts-only-v42-premium-oi-plus-master-mind','provider':'Delta Exchange India public APIs','timestamp':time.time()}
 @app.head('/')
 def head():return None
 @app.get('/health')
@@ -83,14 +87,18 @@ def health():
     now=time.time()
     return {
         'status':'healthy',
-        'mode':'alerts-only-v41-ema5-ema918-fib-plus-master-mind',
+        'mode':'alerts-only-v42-premium-oi-plus-master-mind',
         'delta_ws':delta_market_service.ws_connected,
         'delta_ws_age_seconds':round(now-delta_market_service.last_ws_message,1) if delta_market_service.last_ws_message else None,
         'delta_ws_reconnects':delta_market_service.reconnect_count,
         'active_flow_overlay':bool(getattr(delta_auto_engine,'active_flow_overlay_installed',False)),
         'requested_indicator_overlay':bool(getattr(delta_auto_engine,'requested_indicator_overlay_installed',False)),
+        'premium_oi_overlay':bool(getattr(delta_auto_engine,'premium_oi_overlay_installed',False)),
+        'option_premium_ema5_gate':True,
+        'option_oi_history_confirmation':True,
+        'nearby_strike_oi_confirmation':True,
         'active_flow_target_rr':getattr(delta_auto_engine,'active_flow_target_rr',None),
-        'robo_staff_v41_enabled':True,
+        'robo_staff_v42_enabled':True,
         'robo_staff_daily_signal_cap':dict(DAILY_SIGNAL_CAP),
         'master_mind_enabled':True,
         'master_mind_status':master_mind_scalp_engine.last_status,

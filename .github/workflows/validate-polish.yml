@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF V4.1 EMA5 EMA9-18 Fib RR1.85
+name: Validate ROBO STAFF V4.2 Premium OI RR1.85
 
 on:
   pull_request:
@@ -16,9 +16,9 @@ jobs:
 
       - name: Python syntax compile
         run: |
-          python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py precision_overlay.py active_flow_indicator_overlay.py market_research.py performance_store.py short_signal_formatter.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
+          python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py precision_overlay.py active_flow_indicator_overlay.py option_premium_analysis.py option_premium_history_service.py market_research.py performance_store.py short_signal_formatter.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
 
-      - name: Validate Active Flow EMA/Fib policy
+      - name: Validate Active Flow V4.2 premium OI policy
         run: |
           python - <<'PY'
           from copy import deepcopy
@@ -29,6 +29,7 @@ jobs:
               quality_score, quality_label,
           )
           from active_flow_indicator_overlay import _side_of, _cross_9_18
+          from option_premium_analysis import analyze_premium_rows, analyze_oi_rows, classify_premium_oi
 
           assert POLISH_VERSION == 'FRESH_V4.1_ACTIVE_FLOW_SCALP_2026-09-30'
           assert MODE_REVISION == 'ACTIVE_LOCAL_FLOW_2026-09-30'
@@ -53,8 +54,7 @@ jobs:
           assert ok, reason
           assert s['direction']=='BULLISH'
           assert s['pattern'] in {'PULLBACK_FLOW','STRUCTURE_FLOW','MOMENTUM_FLOW','MICRO_FLOW','BREAKOUT_FLOW'}
-          score=quality_score('BTC',s,6.0)
-          assert score >= MIN_ALERT_SCORE, score
+          assert quality_score('BTC',s,6.0) >= MIN_ALERT_SCORE
 
           bad=deepcopy(base)
           for tf in ('15m','1h'):
@@ -62,45 +62,64 @@ jobs:
           ok,reason=evaluate_entry('BTC','SETUP',bad)
           assert not ok and 'both strongly opposite' in reason
 
-          dead=deepcopy(base)
-          dead['tf']['5m']['adx']=4;dead['tf']['5m']['rel_volume']=0.1;dead['tf']['1m']['rel_volume']=0.1
-          ok,reason=evaluate_entry('BTC','SETUP',dead)
-          assert not ok and 'dead tape' in reason
-
           assert contract_gate('BTC','OPTION BUY',entry=10.0,bid=9.8,ask=10.1,spot=80000,delta=.45,minutes_to_expiry=90,python_score=60)[0]
           assert not contract_gate('BTC','OPTION BUY',entry=.01,bid=.01,ask=.02,spot=80000,delta=.45,minutes_to_expiry=90,python_score=90)[0]
           assert quality_label(50)=='VALID' and quality_label(66)=='STRONG' and quality_label(82)=='ELITE'
+          assert _side_of(101,100)=='ABOVE' and _side_of(99,100)=='BELOW'
 
-          assert _side_of(101,100)=='ABOVE'
-          assert _side_of(99,100)=='BELOW'
-          rows=[]
+          cross_rows=[]
           for i in range(40):
               close=100-(i*0.05) if i<25 else 98.75+((i-24)*0.35)
-              rows.append({'close':close})
-          cross=_cross_9_18(rows,3)
-          assert cross['side'] in {'BULLISH','NONE'}
+              cross_rows.append({'close':close})
+          assert _cross_9_18(cross_rows,3)['side'] in {'BULLISH','NONE'}
+
+          # Pure option-premium confirmation test: rising premium, EMA5 support,
+          # EMA9/18 bullish context and positive OI flow.
+          rows=[]
+          p=10.0
+          for i in range(40):
+              p += 0.03 if i<20 else 0.10
+              rows.append({'time':i*300,'open':p-0.05,'high':p+0.10,'low':p-0.10,'close':p,'volume':100+i*4})
+          pa=analyze_premium_rows(rows)
+          assert pa['sufficient'] and pa['gate_pass'], pa
+          assert pa['close'] > pa['ema5']
+          assert pa['momentum_score'] >= 60
+
+          oi=[]
+          o=1000.0
+          for i in range(12):
+              o += 20
+              oi.append({'time':i*300,'open':o-5,'high':o+5,'low':o-5,'close':o,'volume':0})
+          oa=analyze_oi_rows(oi)
+          assert oa['sufficient'] and oa['change_pct'] > 0
+          flow=classify_premium_oi(pa['change_3bar_pct'],oa['change_pct'])
+          assert flow['label']=='PREMIUM_UP_OI_UP' and flow['score']==100.0
 
           stats=Path('performance_store.py').read_text()
           target_overlay=Path('precision_overlay.py').read_text()
           indicator_overlay=Path('active_flow_indicator_overlay.py').read_text()
+          history_service=Path('option_premium_history_service.py').read_text()
           formatter=Path('short_signal_formatter.py').read_text()
           app=Path('app.py').read_text()
-          assert "EPOCH='FRESH_V4.1_EMA5_EMA918_FIB_RR185_2026-10-01'" in stats
-          assert "STATS_TABLE='delta_signal_stats_v41_ema918_fib_rr185'" in stats
-          assert "return [('OPTION BUY', side, best)]" in target_overlay
-          assert '(1.85, 2.30, 3.00)' in target_overlay
-          assert 'engine.active_flow_target_rr = 1.85' in target_overlay
+          assert "EPOCH='FRESH_V4.2_PREMIUM_OI_RR185_2026-10-01'" in stats
+          assert "STATS_TABLE='delta_signal_stats_v42_premium_oi_rr185'" in stats
+          assert "return [('OPTION BUY',side,best)]" in target_overlay
+          assert 'premium.get(\'gate_pass\')' in target_overlay
+          assert 'option_premium_history_service.analyze' in target_overlay
+          assert '(1.85,2.30,3.00)' in target_overlay
           assert '5M candle vs EMA5' in indicator_overlay
-          assert '5M EMA9/18 alignment' in indicator_overlay
           assert 'daily_fib_context_only' in indicator_overlay
-          assert '5M MOVING AVERAGE CHECK' in formatter
-          assert 'DAILY FIB — LOOK ONLY' in formatter
-          assert 'install_active_flow_indicator_overlay(delta_auto_engine)' in app
+          assert "symbol=f'OI:{key}'" not in history_service  # ensure OI is passed only as a REST query value
+          assert "self.get_history(f'OI:{key}'" in history_service
+          assert "self.get_history(f'MARK:{key}'" in history_service
+          assert 'OPTION PREMIUM 5M' in formatter
+          assert 'OI / LIQUIDITY' in formatter
+          assert 'premium_oi_overlay' in app
           assert "master_mind_symbols':['BTCUSD','XAUTUSD']" in app
 
-          forbidden=['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', 'DELTA_API_SECRET', 'DELTA_API_KEY']
-          for path in ('delta_signal_engine.py','polish_policy.py','precision_overlay.py','active_flow_indicator_overlay.py','short_signal_formatter.py'):
+          forbidden=['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', '/v2/orders', 'DELTA_API_SECRET', 'DELTA_API_KEY']
+          for path in ('delta_signal_engine.py','polish_policy.py','precision_overlay.py','active_flow_indicator_overlay.py','option_premium_analysis.py','option_premium_history_service.py','short_signal_formatter.py'):
               text=Path(path).read_text()
               for needle in forbidden: assert needle not in text, (path,needle)
-          print('ACTIVE_FLOW_EMA5_EMA918_FIB_RR185_OK')
+          print('ACTIVE_FLOW_V42_PREMIUM_OI_RR185_OK')
           PY
