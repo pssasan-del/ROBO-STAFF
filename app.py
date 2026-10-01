@@ -10,6 +10,7 @@ from delta_signal_engine import delta_auto_engine
 from master_mind_scalp import master_mind_scalp_engine
 from short_signal_formatter import format_short_signal
 from precision_overlay import install_precision_overlay
+from active_flow_indicator_overlay import install_active_flow_indicator_overlay
 from polish_policy import DAILY_SIGNAL_CAP
 
 # V4.1 signal-only mode: keep the frequency gate high enough that the engine
@@ -43,11 +44,14 @@ async def lifespan(app:FastAPI):
     print(f" [GEMINI] {'configured' if settings.GEMINI_API_KEY else 'NOT SET'}")
     print(' [RECOVERY] Delta WS auto-reconnect + heartbeat: ENABLED')
     print(' [ROBO STAFF] V4.1 ACTIVE FLOW SCALP: ENABLED')
+    print(' [ROBO STAFF] 5M EMA5 candle check + EMA9/18 + RSI/W%R + Fib P/R1/S1: ENABLED')
+    print(' [ROBO STAFF] Daily Fib P/R1/S1: CONTEXT ONLY')
     print(f' [ROBO STAFF] Daily caps: BTC {DAILY_SIGNAL_CAP["BTC"]} | ETH {DAILY_SIGNAL_CAP["ETH"]} | GOLD {DAILY_SIGNAL_CAP["GOLD"]}')
     print(' [MASTER MIND] BTCUSD + XAUTUSD (GOLD): ENABLED')
     print(' [CUSTOM STRATEGY ENGINE] PAUSED')
     print(' [PAPER/AUTO TRADE/LIVE EXECUTION] DISABLED')
     print('='*58+'\n')
+    install_active_flow_indicator_overlay(delta_auto_engine)
     install_precision_overlay(delta_auto_engine)
     delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
     delta_auto_engine.format_signal=lambda c: format_short_signal(delta_auto_engine,c)
@@ -59,8 +63,10 @@ async def lifespan(app:FastAPI):
         asyncio.create_task(master_mind_scalp_engine.loop(),name='master-mind-btc-xaut-scalp'),
         asyncio.create_task(heartbeat_loop(),name='heartbeat'),
     ]
-    logger.info('[APP] ALERTS ONLY started; V4.1 active-flow=%s master_mind_symbols=%s daily_caps=%s',
-                getattr(delta_auto_engine,'active_flow_overlay_installed',False),['BTCUSD','XAUTUSD'],DAILY_SIGNAL_CAP)
+    logger.info('[APP] ALERTS ONLY started; V4.1 active-flow=%s requested_indicators=%s master_mind_symbols=%s daily_caps=%s',
+                getattr(delta_auto_engine,'active_flow_overlay_installed',False),
+                getattr(delta_auto_engine,'requested_indicator_overlay_installed',False),
+                ['BTCUSD','XAUTUSD'],DAILY_SIGNAL_CAP)
     yield
     telegram_bot.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
     for t in tasks:t.cancel()
@@ -69,7 +75,7 @@ async def lifespan(app:FastAPI):
 
 app=FastAPI(title='Delta Crypto AI Bot V9',lifespan=lifespan)
 @app.get('/')
-def root():return {'service':'Delta Crypto AI Bot V9','status':'online','mode':'alerts-only-v41-plus-master-mind','provider':'Delta Exchange India public APIs','timestamp':time.time()}
+def root():return {'service':'Delta Crypto AI Bot V9','status':'online','mode':'alerts-only-v41-ema5-ema918-fib-plus-master-mind','provider':'Delta Exchange India public APIs','timestamp':time.time()}
 @app.head('/')
 def head():return None
 @app.get('/health')
@@ -77,11 +83,13 @@ def health():
     now=time.time()
     return {
         'status':'healthy',
-        'mode':'alerts-only-v41-plus-master-mind',
+        'mode':'alerts-only-v41-ema5-ema918-fib-plus-master-mind',
         'delta_ws':delta_market_service.ws_connected,
         'delta_ws_age_seconds':round(now-delta_market_service.last_ws_message,1) if delta_market_service.last_ws_message else None,
         'delta_ws_reconnects':delta_market_service.reconnect_count,
         'active_flow_overlay':bool(getattr(delta_auto_engine,'active_flow_overlay_installed',False)),
+        'requested_indicator_overlay':bool(getattr(delta_auto_engine,'requested_indicator_overlay_installed',False)),
+        'active_flow_target_rr':getattr(delta_auto_engine,'active_flow_target_rr',None),
         'robo_staff_v41_enabled':True,
         'robo_staff_daily_signal_cap':dict(DAILY_SIGNAL_CAP),
         'master_mind_enabled':True,
