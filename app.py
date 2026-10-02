@@ -10,7 +10,9 @@ from strategy_store import strategy_store
 from bot import telegram_bot
 from master_mind_scalp import master_mind_scalp_engine, MASTER_MIND_VERSION
 from master_mind_only_telegram import install_master_mind_only_telegram
-from trend_breakout_retest_v1 import tbr_engine, VERSION as TBR_VERSION
+from trend_breakout_retest_v1 import tbr_engine
+import runtime_overrides  # approved TBR fast9/180 + Fib + option premium floor
+from trend_breakout_retest_v1 import VERSION as TBR_VERSION
 from delta_signal_engine import delta_auto_engine
 from precision_overlay import install_precision_overlay
 
@@ -20,7 +22,7 @@ async def heartbeat_loop():
         try:
             ws_age = (time.time() - delta_market_service.last_ws_message) if delta_market_service.last_ws_message else None
             logger.info(
-                "[HEARTBEAT] app=alive mode=master-mind-only delta_ws=%s ws_age=%s reconnects=%s",
+                "[HEARTBEAT] app=alive mode=multi-signal-no-execution delta_ws=%s ws_age=%s reconnects=%s",
                 "connected" if delta_market_service.ws_connected else "reconnecting/rest",
                 f"{ws_age:.0f}s" if ws_age is not None else "n/a",
                 delta_market_service.reconnect_count,
@@ -48,7 +50,6 @@ async def lifespan(app: FastAPI):
     print("=" * 64 + "\n")
 
     install_master_mind_only_telegram(telegram_bot, master_mind_scalp_engine)
-    # Preserve MASTER MIND unchanged; add the two signal-only engines in parallel.
     install_precision_overlay(delta_auto_engine)
     master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)
     delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
@@ -84,13 +85,7 @@ app = FastAPI(title="Delta Crypto AI Bot V9", lifespan=lifespan)
 
 @app.get("/")
 def root():
-    return {
-        "service": "Delta Crypto AI Bot V9",
-        "status": "online",
-        "mode": "multi-signal-no-execution",
-        "provider": "Delta Exchange India public APIs",
-        "timestamp": time.time(),
-    }
+    return {"service": "Delta Crypto AI Bot V9", "status": "online", "mode": "multi-signal-no-execution", "provider": "Delta Exchange India public APIs", "timestamp": time.time()}
 
 
 @app.head("/")
@@ -102,29 +97,24 @@ def head():
 def health():
     now = time.time()
     return {
-        "status": "healthy",
-        "mode": "multi-signal-no-execution",
+        "status": "healthy", "mode": "multi-signal-no-execution",
         "delta_ws": delta_market_service.ws_connected,
         "delta_ws_age_seconds": round(now - delta_market_service.last_ws_message, 1) if delta_market_service.last_ws_message else None,
         "delta_ws_reconnects": delta_market_service.reconnect_count,
         "telegram_alerts": True,
-        "master_mind_enabled": True,
-        "master_mind_only": False,
+        "master_mind_enabled": True, "master_mind_only": False,
         "master_mind_version": MASTER_MIND_VERSION,
         "master_mind_status": master_mind_scalp_engine.last_status,
         "master_mind_status_by_symbol": master_mind_scalp_engine.last_status_by_symbol,
         "master_mind_reason_by_symbol": master_mind_scalp_engine.last_reason_by_symbol,
         "master_mind_symbols": ["BTCUSD", "XAUTUSD"],
         "master_mind_last_scan_age_seconds": round(now - master_mind_scalp_engine.last_scan_at, 1) if master_mind_scalp_engine.last_scan_at else None,
-        "robo_staff_v7_1_enabled": True,
-        "robo_staff_v7_1_mode": "OPTION_BUY_SIGNAL_ONLY",
-        "tbr_v1_enabled": True,
-        "tbr_v1_version": TBR_VERSION,
+        "robo_staff_v7_1_enabled": True, "robo_staff_v7_1_mode": "OPTION_BUY_SIGNAL_ONLY",
+        "tbr_v1_enabled": True, "tbr_v1_version": TBR_VERSION,
+        "tbr_v1_history_target": 180, "tbr_v1_fast_start": 9, "tbr_v1_fib_verification": True,
         "tbr_v1_status": tbr_engine.last_status,
         "tbr_v1_last_scan_age_seconds": round(now - tbr_engine.last_scan_at, 1) if tbr_engine.last_scan_at else None,
         "other_background_signal_generators": False,
-        "paper_trading": False,
-        "auto_trade_prep": False,
-        "live_execution": False,
-        "auto_trading": False,
+        "paper_trading": False, "auto_trade_prep": False,
+        "live_execution": False, "auto_trading": False,
     }
