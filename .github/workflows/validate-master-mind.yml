@@ -1,4 +1,4 @@
-name: Validate Master Mind BTC + XAUT NIFTY-Style Scalp
+name: Validate Master Mind Only Runtime
 
 on:
   pull_request:
@@ -16,14 +16,15 @@ jobs:
 
       - name: Python syntax compile
         run: |
-          python -m py_compile master_mind_scalp.py app.py delta_signal_engine.py polish_policy.py
+          python -m py_compile master_mind_scalp.py master_mind_only_telegram.py app.py bot.py delta_market_service.py delta_options_service.py
 
-      - name: Validate isolation and BTC/XAUT confirmation stack
+      - name: Validate Master Mind isolation and only-engine runtime
         run: |
           python - <<'PY'
           from pathlib import Path
           mm=Path('master_mind_scalp.py').read_text()
           app=Path('app.py').read_text()
+          ui=Path('master_mind_only_telegram.py').read_text()
 
           required=[
               'MASTER MIND SIGNAL ALERT',
@@ -46,26 +47,38 @@ jobs:
           for needle in required:
               assert needle in mm, needle
 
-          # Separate cooldown per symbol; BTC must never block Gold.
           assert "self.last_alert_at.get(symbol, 0.0)" in mm
           assert "self.last_alert_key.get(symbol, '')" in mm
           assert "for symbol in MASTER_MIND_SYMBOLS" in mm
           assert "XAUTUSD (GOLD)" in mm
-
-          # Old EMA95/McGinley/Momentum-only Master Mind logic remains removed.
           assert '_mcginley(' not in mm
           assert '_momentum(' not in mm
           assert '_ema(c5,95)' not in mm
 
           assert 'master_mind_scalp_engine.loop()' in app
           assert 'master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)' in app
-          assert 'master_mind_symbols' in app and 'BTCUSD' in app and 'XAUTUSD' in app
-          assert 'master_mind_status_by_symbol' in app
+          assert 'install_master_mind_only_telegram' in app
+          assert '"mode": "master-mind-only-signal-mode"' in app
+          assert '"master_mind_only": True' in app
+          assert '"robo_staff_v7_1_enabled": False' in app
+          assert '"tbr_v1_enabled": False' in app
 
+          # No other background signal engine may be started or installed.
           for forbidden in [
-              'performance_store','research_store','BASE_COOLDOWN_MINUTES','FAIL_COOLDOWN_MINUTES','SUCCESS_COOLDOWN_MINUTES',
-              'place_order(','modify_order(','cancel_order(','square_off(','DELTA_API_KEY','DELTA_API_SECRET'
+              'delta_auto_engine.loop()', 'tbr_engine.loop()', 'install_v7_taker_flow(',
+              'install_v7_status_overlay(', 'install_precision_overlay(', 'install_tbr_telegram(',
+              'from delta_signal_engine import delta_auto_engine',
+              'from trend_breakout_retest_v1 import tbr_engine',
           ]:
-              assert forbidden not in mm, forbidden
-          print('MASTER_MIND_BTC_XAUT_NIFTY_STYLE_ISOLATION_OK')
+              assert forbidden not in app, forbidden
+
+          assert 'ROBO STAFF V7.1: *OFF*' in ui
+          assert 'TBR V1: *OFF*' in ui
+          assert 'MASTER MIND ONLY' in ui
+
+          for path in ('master_mind_scalp.py','master_mind_only_telegram.py','app.py'):
+              text=Path(path).read_text()
+              for forbidden in ['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', '/v2/orders', 'DELTA_API_KEY', 'DELTA_API_SECRET']:
+                  assert forbidden not in text,(path,forbidden)
+          print('MASTER_MIND_ONLY_RUNTIME_OK')
           PY
