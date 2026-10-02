@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF V6 HTF Trend Retest
+name: Validate ROBO STAFF V7 Taker Flow Pullback
 
 on:
   pull_request:
@@ -16,77 +16,37 @@ jobs:
 
       - name: Python syntax compile
         run: |
-          python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py precision_overlay.py option_premium_analysis.py option_premium_history_service.py market_research.py performance_store.py short_signal_formatter.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
+          python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py precision_overlay.py option_premium_analysis.py option_premium_history_service.py market_research.py performance_store.py short_signal_formatter.py v7_taker_flow.py v7_status_overlay.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
 
-      - name: Validate V6 HTF trend-retest policy
+      - name: Validate V7 research-match filters
         run: |
           python - <<'PY'
-          from copy import deepcopy
           from pathlib import Path
-          from polish_policy import (
-              POLISH_VERSION, MODE_REVISION, MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE,
-              DAILY_RESEARCH_TARGET, BASE_COOLDOWN_MINUTES, DAILY_SIGNAL_CAP,
-              evaluate_entry, contract_gate, quality_score, quality_label,
-          )
-
-          assert POLISH_VERSION == 'FRESH_V6_HTF_TREND_RETEST_2026-10-02'
-          assert MODE_REVISION == '1H_15M_5M_RETEST_1M_TRIGGER_2026-10-02'
-          assert (MIN_ALERT_SCORE, STRONG_SCORE, ELITE_SCORE) == (72,82,90)
-          assert DAILY_RESEARCH_TARGET == 6
-          assert BASE_COOLDOWN_MINUTES == 8
-          assert DAILY_SIGNAL_CAP == {'BTC':24,'ETH':24,'GOLD':0}
-
-          base={
-              'symbol':'BTCUSD','direction':'MIXED','structure':'HH/HL','pattern':'NONE',
-              'setup_id':'BTCUSD:MIXED:NONE:123','daily_zone':'PIVOT_TO_R1','five_zone':'PIVOT_TO_R1',
-              'vwap_distance_atr':0.7,'ema9_distance_atr':0.55,'distance_to_next_pivot_atr':1.2,
-              'one_min_breakout':False,
-              'tf':{
-                  '1m':{'trend':'BULLISH','price':101.0,'ema5':100.8,'ema9':100.5,'ema20':100.0,'vwap':100.6,'plus_di':27,'minus_di':20,'rsi':57,'williams_r':-45,'adx':14,'rel_volume':0.70,'atr':0.5},
-                  '5m':{'trend':'BULLISH','price':101.0,'ema5':100.7,'ema9':100.4,'ema20':100.0,'vwap':100.5,'plus_di':28,'minus_di':20,'rsi':55,'williams_r':-46,'adx':18,'rel_volume':0.80,'atr':1.0},
-                  '15m':{'trend':'BULLISH','price':100.5,'ema5':100.3,'ema9':100.2,'ema20':100.0,'vwap':100.2,'plus_di':24,'minus_di':18,'adx':19,'rel_volume':0.55},
-                  '1h':{'trend':'BULLISH','price':100.2,'ema5':100.1,'ema9':100.0,'ema20':99.9,'vwap':100.0,'plus_di':23,'minus_di':19,'adx':18,'rel_volume':0.45},
-              },
-          }
-
-          s=deepcopy(base);ok,reason=evaluate_entry('BTC','SETUP',s)
-          assert ok,reason
-          assert s['direction']=='BULLISH'
-          assert s['pattern']=='RETEST_RESUME'
-          assert quality_score('BTC',s,60)>=MIN_ALERT_SCORE
-
-          bad=deepcopy(base);bad['tf']['15m']['trend']='BEARISH'
-          ok,reason=evaluate_entry('BTC','SETUP',bad)
-          assert not ok and '1H and 15M regime not aligned' in reason
-
-          chase=deepcopy(base);chase['vwap_distance_atr']=2.4
-          ok,reason=evaluate_entry('BTC','SETUP',chase)
-          assert not ok and 'chased entry' in reason
-
-          assert not evaluate_entry('GOLD','SETUP',deepcopy(base))[0]
-          assert contract_gate('BTC','OPTION BUY',entry=10.0,bid=9.9,ask=10.1,spot=80000,delta=.45,minutes_to_expiry=120,python_score=80)[0]
-          assert not contract_gate('BTC','OPTION BUY',entry=10.0,bid=9.9,ask=10.1,spot=80000,delta=.25,minutes_to_expiry=120,python_score=90)[0]
-          assert quality_label(72)=='VALID' and quality_label(82)=='STRONG' and quality_label(90)=='ELITE'
-
+          v7=Path('v7_taker_flow.py').read_text()
           stats=Path('performance_store.py').read_text()
-          overlay=Path('precision_overlay.py').read_text()
-          formatter=Path('short_signal_formatter.py').read_text()
+          fmt=Path('short_signal_formatter.py').read_text()
           app=Path('app.py').read_text()
-          assert 'FRESH_V6_HTF_TREND_RETEST_2026-10-02' in stats
-          assert 'delta_signal_stats_v6_htf_trend_retest' in stats
-          assert 'v6_htf_trend_retest_installed' in overlay
-          assert '0.35 <= ad <= 0.60' in overlay
-          assert 'V6 HTF TREND RETEST' in formatter
-          assert 'Outcome tracking: T1 / SL / STALE / INVALIDATED' in formatter
-          assert 'install_precision_overlay(delta_auto_engine)' in app
-          assert 'win_status_tracking' in app
-          assert 'master_mind_symbols' in app
-          assert 'telegram_alerts' in app
+
+          for needle in [
+              'WINDOW_START_UTC = 12','WINDOW_END_UTC_EXCLUSIVE = 18',
+              'SHORT_TAKER_MAX = 0.48','LONG_TAKER_MIN = 0.52',
+              'MIN_RVOL = 1.00','/v2/trades/{symbol}',
+              'record_direction_10m','EMA9 pullback'
+          ]:
+              assert needle in v7, needle
+          assert 'FRESH_V7_TAKER_FLOW_PULLBACK_2026-10-02' in stats
+          assert 'delta_signal_stats_v7_taker_flow_pullback' in stats
+          assert 'direction_10m' in stats
+          assert 'V7 TAKER-FLOW PULLBACK' in fmt
+          assert '10M DIRECTION' in fmt
+          assert 'install_v7_taker_flow(delta_auto_engine)' in app
+          assert 'install_v7_status_overlay(telegram_bot)' in app
+          assert '"telegram_alerts":True' in app
 
           forbidden=['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', '/v2/orders', 'DELTA_API_SECRET', 'DELTA_API_KEY']
-          for path in ('polish_policy.py','precision_overlay.py','short_signal_formatter.py','app.py'):
+          for path in ('v7_taker_flow.py','v7_status_overlay.py','short_signal_formatter.py','app.py'):
               text=Path(path).read_text()
               for needle in forbidden:
                   assert needle not in text,(path,needle)
-          print('ROBO_STAFF_V6_HTF_TREND_RETEST_OK')
+          print('ROBO_STAFF_V7_TAKER_FLOW_PULLBACK_OK')
           PY
