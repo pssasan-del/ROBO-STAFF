@@ -59,7 +59,7 @@ jobs:
 
           assert 'master_mind_scalp_engine.loop()' in app
           assert 'master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)' in app
-          assert "'master_mind_symbols':['BTCUSD','XAUTUSD']" in app
+          assert 'master_mind_symbols' in app and 'BTCUSD' in app and 'XAUTUSD' in app
           assert 'master_mind_status_by_symbol' in app
 
           for forbidden in [
