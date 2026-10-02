@@ -1,4 +1,4 @@
-name: Validate ROBO STAFF V7 Taker Flow Pullback
+name: Validate ROBO STAFF V7.1 Scalp Opportunity
 
 on:
   pull_request:
@@ -18,35 +18,45 @@ jobs:
         run: |
           python -m py_compile delta_signal_engine.py delta_options_service.py polish_policy.py precision_overlay.py option_premium_analysis.py option_premium_history_service.py market_research.py performance_store.py short_signal_formatter.py v7_taker_flow.py v7_status_overlay.py bot.py config.py strategy_engine.py master_mind_scalp.py app.py
 
-      - name: Validate V7 research-match filters
+      - name: Validate V7.1 loose scalp filters
         run: |
           python - <<'PY'
           from pathlib import Path
           v7=Path('v7_taker_flow.py').read_text()
+          policy=Path('polish_policy.py').read_text()
+          overlay=Path('precision_overlay.py').read_text()
           stats=Path('performance_store.py').read_text()
           fmt=Path('short_signal_formatter.py').read_text()
           app=Path('app.py').read_text()
 
           for needle in [
-              'WINDOW_START_UTC = 12','WINDOW_END_UTC_EXCLUSIVE = 18',
-              'SHORT_TAKER_MAX = 0.48','LONG_TAKER_MIN = 0.52',
-              'MIN_RVOL = 1.00','/v2/trades/{symbol}',
-              'record_direction_10m','EMA9 pullback'
+              'FRESH_V7_1_SCALP_OPPORTUNITY_2026-10-02',
+              'MIN_RVOL_CORE = 0.60','MIN_RVOL_OFFHOUR = 0.75',
+              'CORE_SHORT_TAKER_MAX = 0.49','CORE_LONG_TAKER_MIN = 0.51',
+              'OFFHOUR_SHORT_TAKER_MAX = 0.48','OFFHOUR_LONG_TAKER_MIN = 0.52',
+              'FLOW_FALLBACK_RVOL = 1.20','/v2/trades/{symbol}',
+              'Off-window scalp allowed','record_direction_10m'
           ]:
               assert needle in v7, needle
-          assert 'FRESH_V7_TAKER_FLOW_PULLBACK_2026-10-02' in stats
-          assert 'delta_signal_stats_v7_taker_flow_pullback' in stats
+          assert 'MIN_ALERT_SCORE = 64' in policy
+          assert 'DAILY_SIGNAL_CAP = {"BTC": 48, "ETH": 48, "GOLD": 0}' in policy
+          assert 'BASE_COOLDOWN_MINUTES = 5' in policy
+          assert '1H not strongly opposite' in policy
+          assert '0.30<=ad<=0.65' in overlay
+          assert 'rank<42' in overlay
+          assert 'premium momentum soft-scored' in overlay
+          assert 'FRESH_V7_1_SCALP_OPPORTUNITY_2026-10-02' in stats
+          assert 'delta_signal_stats_v7_1_scalp_opportunity' in stats
           assert 'direction_10m' in stats
-          assert 'V7 TAKER-FLOW PULLBACK' in fmt
-          assert '10M DIRECTION' in fmt
+          assert 'V7.1 SCALP OPPORTUNITY' in fmt
           assert 'install_v7_taker_flow(delta_auto_engine)' in app
-          assert 'install_v7_status_overlay(telegram_bot)' in app
+          assert '"v7_alert_window":"24h"' in app
           assert '"telegram_alerts":True' in app
 
           forbidden=['place_order(', 'modify_order(', 'cancel_order(', 'square_off(', '/v2/orders', 'DELTA_API_SECRET', 'DELTA_API_KEY']
-          for path in ('v7_taker_flow.py','v7_status_overlay.py','short_signal_formatter.py','app.py'):
+          for path in ('v7_taker_flow.py','polish_policy.py','precision_overlay.py','v7_status_overlay.py','short_signal_formatter.py','app.py'):
               text=Path(path).read_text()
               for needle in forbidden:
                   assert needle not in text,(path,needle)
-          print('ROBO_STAFF_V7_TAKER_FLOW_PULLBACK_OK')
+          print('ROBO_STAFF_V7_1_SCALP_OPPORTUNITY_OK')
           PY
