@@ -12,135 +12,85 @@ from delta_signal_engine import delta_auto_engine
 from master_mind_scalp import master_mind_scalp_engine
 from short_signal_formatter import format_short_signal
 from precision_overlay import install_precision_overlay
-from polish_policy import DAILY_SIGNAL_CAP, POLISH_VERSION
+from v7_taker_flow import install_v7_taker_flow, V7_VERSION
+from v7_status_overlay import install_v7_status_overlay
+from polish_policy import DAILY_SIGNAL_CAP
 
 
 async def heartbeat_loop():
     while True:
         try:
-            ws_age = (time.time() - delta_market_service.last_ws_message) if delta_market_service.last_ws_message else None
-            logger.info(
-                "[HEARTBEAT] app=alive delta_ws=%s ws_age=%s reconnects=%s",
-                "connected" if delta_market_service.ws_connected else "reconnecting/rest",
-                f"{ws_age:.0f}s" if ws_age is not None else "n/a",
-                delta_market_service.reconnect_count,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("[HEARTBEAT] health check failed safely: %s", exc)
-        await asyncio.sleep(max(30, settings.HEARTBEAT_SECONDS))
+            ws_age=(time.time()-delta_market_service.last_ws_message) if delta_market_service.last_ws_message else None
+            logger.info("[HEARTBEAT] app=alive delta_ws=%s ws_age=%s reconnects=%s","connected" if delta_market_service.ws_connected else "reconnecting/rest",f"{ws_age:.0f}s" if ws_age is not None else "n/a",delta_market_service.reconnect_count)
+        except asyncio.CancelledError:raise
+        except Exception as exc:logger.warning("[HEARTBEAT] health check failed safely: %s",exc)
+        await asyncio.sleep(max(30,settings.HEARTBEAT_SECONDS))
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app:FastAPI):
     strategy_store.init()
-    print("\n" + "=" * 64)
+    print("\n"+"="*64)
     print(" DELTA CRYPTO AI BOT V9 - ALERTS ONLY")
-    print("=" * 64)
-    print(" [DELTA] Public market data + options: NO API KEY REQUIRED")
-    print(f" [SYMBOLS] {settings.delta_symbols()}")
-    print(f" [TELEGRAM] {'configured' if settings.TELEGRAM_BOT_TOKEN else 'NOT SET'}")
-    print(f" [GEMINI] {'configured' if settings.GEMINI_API_KEY else 'NOT SET'}")
-    print(" [RECOVERY] Delta WS auto-reconnect + heartbeat: ENABLED")
-    print(f" [ROBO STAFF] {POLISH_VERSION}: ENABLED")
-    print(" [V6] Universe: BTC + ETH only")
-    print(" [V6] 1H regime -> 15M confirmation -> 5M retest/setup -> 1M timing")
-    print(" [V6] RSI/Williams/ADX/Pivots: CONTEXT, not stacked mandatory gates")
-    print(" [V6] Near-ATM option, delta 0.35-0.60, tight spread/liquidity: REQUIRED")
-    print(" [V6] Premium momentum: REQUIRED when sufficient premium history exists")
-    print(" [V6] Underlying structural invalidation: 1.05 ATR")
-    print(" [V6] T1 minimum target: 1.85R")
-    print(
-        f' [ROBO STAFF] Daily caps: BTC {DAILY_SIGNAL_CAP["BTC"]} | '
-        f'ETH {DAILY_SIGNAL_CAP["ETH"]} | GOLD {DAILY_SIGNAL_CAP["GOLD"]}'
-    )
-    print(" [WIN STATUS] T1 / SL / STALE / INVALIDATED + Daily/Weekly: ENABLED")
-    print(" [MASTER MIND] BTCUSD + XAUTUSD (GOLD): ENABLED / UNCHANGED")
+    print("="*64)
+    print(f" [ROBO STAFF] {V7_VERSION}: ENABLED")
+    print(" [V7] 12:00-17:59 UTC high-conviction window: REQUIRED")
+    print(" [V7] 1H/15M trend + 5M EMA9 pullback/resume + 1M timing")
+    print(" [V7] 5M RVOL >= 1.0: REQUIRED")
+    print(" [V7] public taker-flow: SHORT <=0.48 / LONG >=0.52")
+    print(" [V7] near-ATM option quality + premium momentum overlay retained")
+    print(" [V7] dual tracking: 10M DIRECTION + OPTION T1/SL")
+    print(" [MASTER MIND] BTCUSD + XAUTUSD: ENABLED / UNCHANGED")
     print(" [TELEGRAM] ROBO STAFF + MASTER MIND alerts: ENABLED")
     print(" [PAPER/AUTO TRADE/LIVE EXECUTION] DISABLED")
-    print("=" * 64 + "\n")
+    print("="*64+"\n")
 
     install_precision_overlay(delta_auto_engine)
+    install_v7_taker_flow(delta_auto_engine)
+    install_v7_status_overlay(telegram_bot)
     delta_auto_engine.set_alert_callback(telegram_bot.broadcast)
-    delta_auto_engine.format_signal = lambda c: format_short_signal(delta_auto_engine, c)
+    delta_auto_engine.format_signal=lambda c:format_short_signal(delta_auto_engine,c)
     master_mind_scalp_engine.set_alert_callback(telegram_bot.broadcast)
 
-    tasks = [
-        asyncio.create_task(telegram_bot.poll(), name="telegram-poll"),
-        asyncio.create_task(delta_market_service.websocket_loop(), name="delta-ws"),
-        asyncio.create_task(delta_auto_engine.loop(), name="delta-auto-signal-engine"),
-        asyncio.create_task(master_mind_scalp_engine.loop(), name="master-mind-btc-xaut-scalp"),
-        asyncio.create_task(heartbeat_loop(), name="heartbeat"),
+    tasks=[
+        asyncio.create_task(telegram_bot.poll(),name="telegram-poll"),
+        asyncio.create_task(delta_market_service.websocket_loop(),name="delta-ws"),
+        asyncio.create_task(delta_auto_engine.loop(),name="delta-auto-signal-engine"),
+        asyncio.create_task(master_mind_scalp_engine.loop(),name="master-mind-btc-xaut-scalp"),
+        asyncio.create_task(heartbeat_loop(),name="heartbeat"),
     ]
-    logger.info(
-        "[APP] V6 HTF trend-retest alerts=%s master_mind_symbols=%s",
-        getattr(delta_auto_engine, "v6_htf_trend_retest_installed", False),
-        ["BTCUSD", "XAUTUSD"],
-    )
+    logger.info("[APP] V7 taker-flow=%s master_mind_symbols=%s",getattr(delta_auto_engine,"v7_taker_flow_installed",False),["BTCUSD","XAUTUSD"])
     yield
-
-    telegram_bot.running = False
-    delta_auto_engine.running = False
-    master_mind_scalp_engine.running = False
-    delta_market_service.running = False
-    for t in tasks:
-        t.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-    await telegram_bot.client.aclose()
-    await delta_market_service.close()
-    await delta_options_service.client.aclose()
-    await option_premium_history_service.close()
+    telegram_bot.running=False;delta_auto_engine.running=False;master_mind_scalp_engine.running=False;delta_market_service.running=False
+    for t in tasks:t.cancel()
+    await asyncio.gather(*tasks,return_exceptions=True)
+    await telegram_bot.client.aclose();await delta_market_service.close();await delta_options_service.client.aclose();await option_premium_history_service.close()
 
 
-app = FastAPI(title="Delta Crypto AI Bot V9", lifespan=lifespan)
-
+app=FastAPI(title="Delta Crypto AI Bot V9",lifespan=lifespan)
 
 @app.get("/")
 def root():
-    return {
-        "service": "Delta Crypto AI Bot V9",
-        "status": "online",
-        "mode": "alerts-only-v6-htf-trend-retest-plus-master-mind",
-        "provider": "Delta Exchange India public APIs",
-        "timestamp": time.time(),
-    }
-
+    return {"service":"Delta Crypto AI Bot V9","status":"online","mode":"alerts-only-v7-taker-flow-plus-master-mind","provider":"Delta Exchange India public APIs","timestamp":time.time()}
 
 @app.head("/")
-def head():
-    return None
-
+def head():return None
 
 @app.get("/health")
 def health():
-    now = time.time()
+    now=time.time()
     return {
-        "status": "healthy",
-        "mode": "alerts-only-v6-htf-trend-retest-plus-master-mind",
-        "strategy_epoch": POLISH_VERSION,
-        "delta_ws": delta_market_service.ws_connected,
-        "delta_ws_age_seconds": round(now - delta_market_service.last_ws_message, 1)
-        if delta_market_service.last_ws_message else None,
-        "delta_ws_reconnects": delta_market_service.reconnect_count,
-        "v6_htf_trend_retest": bool(getattr(delta_auto_engine, "v6_htf_trend_retest_installed", False)),
-        "premium_oi_overlay": bool(getattr(delta_auto_engine, "premium_oi_overlay_installed", False)),
-        "target_rr_t1": getattr(delta_auto_engine, "active_flow_target_rr", None),
-        "robo_staff_v6_enabled": True,
-        "robo_staff_universe": ["BTC", "ETH"],
-        "robo_staff_daily_signal_cap": dict(DAILY_SIGNAL_CAP),
-        "win_status_tracking": True,
-        "telegram_alerts": True,
-        "master_mind_enabled": True,
-        "master_mind_status": master_mind_scalp_engine.last_status,
-        "master_mind_status_by_symbol": master_mind_scalp_engine.last_status_by_symbol,
-        "master_mind_symbols": ["BTCUSD", "XAUTUSD"],
-        "master_mind_last_scan_age_seconds": round(now - master_mind_scalp_engine.last_scan_at, 1)
-        if master_mind_scalp_engine.last_scan_at else None,
-        "custom_strategy_engine_running": False,
-        "paper_trading": False,
-        "auto_trade_prep": False,
-        "live_execution": False,
-        "symbols": settings.delta_symbols(),
-        "auto_trading": False,
+        "status":"healthy","mode":"alerts-only-v7-taker-flow-plus-master-mind","strategy_epoch":V7_VERSION,
+        "delta_ws":delta_market_service.ws_connected,
+        "delta_ws_age_seconds":round(now-delta_market_service.last_ws_message,1) if delta_market_service.last_ws_message else None,
+        "delta_ws_reconnects":delta_market_service.reconnect_count,
+        "v7_taker_flow":bool(getattr(delta_auto_engine,"v7_taker_flow_installed",False)),
+        "v7_window_utc":"12:00-17:59","v7_short_taker_max":0.48,"v7_long_taker_min":0.52,"v7_min_rvol":1.0,
+        "robo_staff_universe":["BTC","ETH"],"robo_staff_daily_signal_cap":dict(DAILY_SIGNAL_CAP),
+        "dual_win_status_tracking":True,"telegram_alerts":True,
+        "master_mind_enabled":True,"master_mind_status":master_mind_scalp_engine.last_status,
+        "master_mind_status_by_symbol":master_mind_scalp_engine.last_status_by_symbol,
+        "master_mind_symbols":["BTCUSD","XAUTUSD"],
+        "master_mind_last_scan_age_seconds":round(now-master_mind_scalp_engine.last_scan_at,1) if master_mind_scalp_engine.last_scan_at else None,
+        "paper_trading":False,"auto_trade_prep":False,"live_execution":False,"symbols":settings.delta_symbols(),"auto_trading":False
     }
