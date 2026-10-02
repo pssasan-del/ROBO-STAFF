@@ -12,14 +12,14 @@ EDGE_KEYS = (
     "edge_samples", "edge_gross_r_sum", "edge_net_r_sum",
     "edge_break_even_pct_sum", "edge_gross_cost_multiple_sum",
 )
-STATS_TABLE = "delta_signal_stats_v7_taker_flow_pullback"
-EPOCH = "FRESH_V7_TAKER_FLOW_PULLBACK_2026-10-02"
+STATS_TABLE = "delta_signal_stats_v7_1_scalp_opportunity"
+EPOCH = "FRESH_V7_1_SCALP_OPPORTUNITY_2026-10-02"
 
 
 class PerformanceStore:
-    """Fresh V7 option-outcome + 10-minute underlying-direction statistics."""
+    """Fresh V7.1 option-outcome + 10-minute underlying-direction statistics."""
     def __init__(self, path=None):
-        self.path = (path or settings.DELTA_STATS_PATH) + ".v7_taker_flow_pullback"
+        self.path = (path or settings.DELTA_STATS_PATH) + ".v7_1_scalp_opportunity"
         self.lock = threading.RLock(); self.data = {"days": {}}
         self.pg = False; self.conn = None
         self._init_persistent(); self._load(); self._prune()
@@ -31,7 +31,7 @@ class PerformanceStore:
                 self.conn = psycopg.connect(settings.DATABASE_URL, autocommit=True); self.pg = True
                 with self.conn.cursor() as cur:
                     cur.execute(f"""CREATE TABLE IF NOT EXISTS {STATS_TABLE}(day TEXT PRIMARY KEY,payload_json TEXT NOT NULL,updated_at TEXT NOT NULL)""")
-                logger.info("[DELTA_STATS] Fresh V7 taker-flow PostgreSQL persistence enabled")
+                logger.info("[DELTA_STATS] Fresh V7.1 scalp-opportunity PostgreSQL persistence enabled")
         except Exception as e:
             logger.warning("[DELTA_STATS] PostgreSQL unavailable; file fallback: %s", e); self.conn=None; self.pg=False
 
