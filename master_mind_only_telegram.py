@@ -1,8 +1,7 @@
 """Telegram presentation layer for the active multi-signal runtime.
 
-Historical filename is retained to avoid unnecessary import churn.  MASTER MIND,
-ROBO STAFF V7.1 and TBR V1 are all signal-only engines; this module only presents
-their status/statistics and never places orders.
+MASTER MIND strategy is not modified here. This module only presents status and
+performance for MASTER MIND, ROBO STAFF V7.1 and TBR V1. No order execution.
 """
 from __future__ import annotations
 
@@ -45,25 +44,56 @@ def _master_status(engine, title="🧠 *MASTER MIND STATUS*"):
     )
 
 
+def _v7_pair(r, group, name):
+    p = (r.get(group) or {}).get(name) or {}
+    w = int(p.get("success", 0)); l = int(p.get("failed", 0)); n = w + l
+    return f"{w}W/{l}L ({round(100*w/n,1) if n else 0.0}%)"
+
+
 def _v7_report(days):
     r = performance_store.report(days)
+    wins = int(r.get("success", 0)); losses = int(r.get("failed", 0)); resolved = wins + losses
+    rate = round(100 * wins / resolved, 1) if resolved else 0.0
+    label = "DAILY" if days == 1 else "WEEKLY"
     return (
-        f"ROBO STAFF V7.1 — {'DAILY' if days == 1 else 'WEEKLY'}\n"
-        f"Signals: {r.get('total', 0)} | Resolved: {r.get('success', 0) + r.get('failed', 0)} | "
-        f"Open: {r.get('unresolved', 0)}\n"
-        f"Wins: {r.get('success', 0)} | Loss/SL: {r.get('failed', 0)} | "
-        f"T1 success: {r.get('success_rate', 0)}%"
+        f"📈 *ROBO STAFF V7.1 — {label} SUCCESS ANALYSIS*\n"
+        f"Signals: {r.get('total', 0)} | Resolved: {resolved} | Open: {r.get('unresolved', 0)}\n"
+        f"Wins: {wins} | Loss/SL: {losses} | *Success rate: {rate}%*\n"
+        f"BTC: {_v7_pair(r,'assets','BTC')} | ETH: {_v7_pair(r,'assets','ETH')} | GOLD: {_v7_pair(r,'assets','GOLD')}\n"
+        f"OPTION BUY: {_v7_pair(r,'actions','OPTION BUY')} | OPTION SELL: {_v7_pair(r,'actions','OPTION SELL')}\n"
+        f"Stale: {r.get('stale',0)} | Invalidated: {r.get('invalidated',0)}"
     )
+
+
+def _tbr_pair(p):
+    p = p or {}; w = int(p.get("wins", 0)); l = int(p.get("losses", 0)); n = w + l
+    return f"{w}W/{l}L ({round(100*w/n,1) if n else 0.0}%)"
 
 
 def _tbr_report(days):
     r = tbr_stats.report(days)
+    label = "DAILY" if days == 1 else "WEEKLY"
     return (
-        f"TBR V1 — {'DAILY' if days == 1 else 'WEEKLY'}\n"
+        f"⚡ *TBR V1 — {label} SUCCESS ANALYSIS*\n"
         f"Signals: {r.get('signals', 0)} | Resolved: {r.get('resolved', 0)} | "
         f"Wins: {r.get('wins', 0)} | Losses: {r.get('losses', 0)}\n"
-        f"T1: {r.get('t1_hits', 0)} | T2: {r.get('t2_hits', 0)} | "
-        f"Win rate: {r.get('success_rate', 0)}% | Net: {r.get('net_r_sum', 0):+.2f}R"
+        f"*Success rate: {r.get('success_rate', 0)}%* | T1 hit rate: {r.get('t1_hit_rate',0)}%\n"
+        f"T1: {r.get('t1_hits', 0)} | T2: {r.get('t2_hits', 0)} | SL: {r.get('sl_exits',0)} | Time exit: {r.get('time_exits',0)}\n"
+        f"BTC: {_tbr_pair((r.get('assets') or {}).get('BTCUSD'))} | ETH: {_tbr_pair((r.get('assets') or {}).get('ETHUSD'))}\n"
+        f"LONG: {_tbr_pair((r.get('directions') or {}).get('LONG'))} | SHORT: {_tbr_pair((r.get('directions') or {}).get('SHORT'))}\n"
+        f"Avg net: {r.get('avg_net_r',0):+.2f}R | Net total: {r.get('net_r_sum',0):+.2f}R | Paper equity: {r.get('realised_equity_pct',0):+.3f}%\n"
+        f"Cancelled: {r.get('cancelled',0)} | Expired: {r.get('expired',0)}"
+    )
+
+
+def _success_analysis(days):
+    label = "TODAY" if days == 1 else "LAST 7 DAYS"
+    return (
+        f"📊 *SUCCESS RATE ANALYSIS — {label}*\n\n"
+        + _v7_report(days)
+        + "\n\n────────────\n"
+        + _tbr_report(days)
+        + "\n\nℹ️ Rates use resolved tracked signals only; open signals are not counted as wins/losses."
     )
 
 
@@ -97,31 +127,32 @@ def install_master_mind_only_telegram(telegram_bot, engine):
                 "🧠 MASTER MIND: BTC + XAUT (GOLD)\n"
                 "📈 ROBO STAFF V7.1: BTC/ETH Option BUY signals\n"
                 "⚡ TBR V1: BTC/ETH Futures signals\n\n"
+                "📊 Daily / 📅 Weekly: V7.1 + TBR success-rate analysis\n"
                 "⚠️ Signal only — no order execution.",
                 self.kb(),
             )
         if t in {"🔥 latest", "latest", "latest signal"}:
             return await self.send(chat, _multi_status(engine), self.kb())
         if t in {"📊 daily", "daily", "daily report"}:
-            msg = _master_status(engine, "📊 *CURRENT ENGINE STATUS*") + "\n\n" + _v7_report(1) + "\n\n" + _tbr_report(1)
-            return await self.send(chat, msg, self.kb())
+            return await self.send(chat, _success_analysis(1), self.kb())
         if t in {"📅 weekly", "weekly", "weekly report"}:
-            msg = _master_status(engine, "📅 *CURRENT ENGINE STATUS*") + "\n\n" + _v7_report(7) + "\n\n" + _tbr_report(7)
-            return await self.send(chat, msg, self.kb())
+            return await self.send(chat, _success_analysis(7), self.kb())
         if t in {"💾 system", "system", "system status"}:
             msg = (
                 _master_status(engine, "💾 *SYSTEM — MULTI SIGNAL*")
                 + "\n\nROBO STAFF V7.1: *ON*"
                 + f"\nV7 last scan: `{_age_text(delta_auto_engine.last_scan_at)}`"
-                + "\nTBR V1: *ON*"
+                + "\nTBR V1: *ON — FAST9 / 180 HISTORY / FIB VERIFY*"
                 + f"\nTBR last scan: `{_age_text(tbr_engine.last_scan_at)}`"
                 + "\nTrading: *DISABLED — SIGNAL ONLY*"
             )
             return await self.send(chat, msg, self.kb())
-        if t in {"tbr", "tbr status", "tbr latest"}:
+        if t in {"v7", "v7 status", "v7 daily"}:
+            return await self.send(chat, _v7_report(1), self.kb())
+        if t == "v7 weekly":
+            return await self.send(chat, _v7_report(7), self.kb())
+        if t in {"tbr", "tbr status", "tbr latest", "tbr daily"}:
             return await self.send(chat, _tbr_report(1) + f"\nLast scan: `{_age_text(tbr_engine.last_scan_at)}`", self.kb())
-        if t == "tbr daily":
-            return await self.send(chat, _tbr_report(1), self.kb())
         if t == "tbr weekly":
             return await self.send(chat, _tbr_report(7), self.kb())
         return await original(uid, chat, text)
