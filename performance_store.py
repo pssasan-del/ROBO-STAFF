@@ -12,14 +12,14 @@ EDGE_KEYS = (
     "edge_samples", "edge_gross_r_sum", "edge_net_r_sum",
     "edge_break_even_pct_sum", "edge_gross_cost_multiple_sum",
 )
-STATS_TABLE = "delta_signal_stats_v7_1_scalp_opportunity"
-EPOCH = "FRESH_V7_1_SCALP_OPPORTUNITY_2026-10-02"
+STATS_TABLE = "delta_signal_stats_v7_1_fresh_20261006"
+EPOCH = "FRESH_V7_1_ANALYSIS_2026-10-06"
 
 
 class PerformanceStore:
     """Fresh V7.1 option-outcome + 10-minute underlying-direction statistics."""
     def __init__(self, path=None):
-        self.path = (path or settings.DELTA_STATS_PATH) + ".v7_1_scalp_opportunity"
+        self.path = (path or settings.DELTA_STATS_PATH) + ".v7_1_fresh_20261006"
         self.lock = threading.RLock(); self.data = {"days": {}}
         self.pg = False; self.conn = None
         self._init_persistent(); self._load(); self._prune()
