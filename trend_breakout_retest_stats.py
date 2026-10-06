@@ -3,14 +3,14 @@ from datetime import datetime, timedelta, timezone
 from config import settings, logger
 
 IST = timezone(timedelta(hours=5, minutes=30))
-EPOCH = "CRYPTO_TREND_BREAKOUT_RETEST_SCALP_V1_18C_2026-10-02"
-TABLE = "tbr_v1_signal_stats"
+EPOCH = "TBR_V1_ADAPTIVE_FRESH_2026-10-06"
+TABLE = "tbr_v1_signal_stats_adaptive_20261006"
 
 
 class TBRStats:
     def __init__(self):
         self.lock = threading.RLock()
-        self.path = settings.DELTA_STATS_PATH + ".tbr_v1"
+        self.path = settings.DELTA_STATS_PATH + ".tbr_v1_adaptive_20261006"
         self.data = {"days": {}}
         self.pg = False
         self.conn = None
