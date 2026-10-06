@@ -23,19 +23,19 @@ from delta_market_service import delta_market_service
 from trend_breakout_retest_stats import tbr_stats
 
 STRATEGY = "CRYPTO_TREND_BREAKOUT_RETEST_SCALP_V1"
-VERSION = "TBR_V1_18C_2026-10-02"
+VERSION = "TBR_V1_ADAPTIVE_2026-10-06"
 SYMBOLS = ("BTCUSD", "ETHUSD")
 MIN_CANDLES = 18
 FETCH_CANDLES = 120
-BREAKOUT_LOOKBACK = 12
-RETEST_BARS = 3
+BREAKOUT_LOOKBACK = 10
+RETEST_BARS = 5
 PAPER_RISK_PCT = 0.0025
 MAX_TOTAL_RISK_PCT = 0.005
 DAILY_LOSS_LIMIT_PCT = 0.01
 MAX_HOLD_5M_BARS = 6
 DUPLICATE_SECONDS = 300
 QUOTE_STALE_SECONDS = 20
-CANDLE_GRACE_SECONDS = 150
+CANDLE_GRACE_SECONDS = 150\nADX_MIN = 18.0\nBREAKOUT_ATR_BUFFER = 0.05\nBREAKOUT_VOLUME_MULT = 1.05\nRETEST_NEAR_ATR = 0.30\nRETEST_INVALID_ATR = 0.40\nCHASE_ATR = 0.20\nMIN_STOP_ATR = 0.40\nMAX_STOP_ATR = 1.80
 
 
 def _f(v, default=0.0):
@@ -117,9 +117,9 @@ def _trend(rows15: List[dict], direction: str):
     if len(e20) < 4: return False, {}
     c = closes[-1]
     if direction == "LONG":
-        ok = c > e20[-1] > e50[-1] and e20[-1] > e20[-4] and adx >= 22 and pdi > mdi
+        ok = c > e20[-1] > e50[-1] and e20[-1] > e20[-4] and adx >= ADX_MIN and pdi > mdi
     else:
-        ok = c < e20[-1] < e50[-1] and e20[-1] < e20[-4] and adx >= 22 and mdi > pdi
+        ok = c < e20[-1] < e50[-1] and e20[-1] < e20[-4] and adx >= ADX_MIN and mdi > pdi
     return ok, {"close":c,"ema20":e20[-1],"ema50":e50[-1],"ema20_3ago":e20[-4],"adx":adx,"plus_di":pdi,"minus_di":mdi}
 
 
@@ -220,11 +220,11 @@ class TrendBreakoutRetestV1:
         avg=sum(vols)/len(vols); rng=float(b["high"])-float(b["low"]); vol=float(b.get("volume") or 0)
         if direction=="LONG":
             level=max(float(x["high"]) for x in prev)
-            ok=float(b["close"])>level+0.10*atr and float(b["close"])>float(b["open"])
+            ok=float(b["close"])>level+BREAKOUT_ATR_BUFFER*atr and float(b["close"])>float(b["open"])
         else:
             level=min(float(x["low"]) for x in prev)
-            ok=float(b["close"])<level-0.10*atr and float(b["close"])<float(b["open"])
-        ok=ok and vol>=1.20*avg and rng<=2.0*atr
+            ok=float(b["close"])<level-BREAKOUT_ATR_BUFFER*atr and float(b["close"])<float(b["open"])
+        ok=ok and vol>=BREAKOUT_VOLUME_MULT*avg and rng<=2.0*atr
         return {"level":level,"atr":atr,"vol_avg":avg,"vol":vol} if ok else None
 
     def _trigger(self,rows5,bidx,direction,setup):
@@ -234,11 +234,11 @@ class TrendBreakoutRetestV1:
         for j in range(bidx+1,upto+1):
             c=rows5[j]
             if direction=="LONG":
-                if float(c["close"])<level-0.30*atr:return "CANCELLED",None,j
-                ok=(float(c["low"])<=level+0.20*atr and float(c["low"])>=level-0.30*atr and float(c["close"])>level and float(c["close"])>float(c["open"]) and float(c["close"])>e9[j] and e9[j]>e20[j])
+                if float(c["close"])<level-RETEST_INVALID_ATR*atr:return "CANCELLED",None,j
+                ok=(float(c["low"])<=level+RETEST_NEAR_ATR*atr and float(c["low"])>=level-RETEST_INVALID_ATR*atr and float(c["close"])>level and float(c["close"])>float(c["open"]) and float(c["close"])>e9[j] and e9[j]>e20[j])
             else:
-                if float(c["close"])>level+0.30*atr:return "CANCELLED",None,j
-                ok=(float(c["high"])>=level-0.20*atr and float(c["high"])<=level+0.30*atr and float(c["close"])<level and float(c["close"])<float(c["open"]) and float(c["close"])<e9[j] and e9[j]<e20[j])
+                if float(c["close"])>level+RETEST_INVALID_ATR*atr:return "CANCELLED",None,j
+                ok=(float(c["high"])>=level-RETEST_NEAR_ATR*atr and float(c["high"])<=level+RETEST_INVALID_ATR*atr and float(c["close"])<level and float(c["close"])<float(c["open"]) and float(c["close"])<e9[j] and e9[j]<e20[j])
             if ok:return "TRIGGER",j,j
         if len(rows5)-1>=bidx+RETEST_BARS:return "EXPIRED",None,upto
         return "WAIT",None,upto
@@ -258,8 +258,8 @@ class TrendBreakoutRetestV1:
         for direction in ("LONG","SHORT"):
             trend_ok,trend_meta=_trend(r15,direction)
             if not trend_ok:continue
-            # Only breakouts recent enough to still have a valid 3-bar retest window.
-            start=max(BREAKOUT_LOOKBACK,len(r5)-4)
+            # Only breakouts recent enough to still have the adaptive retest window.
+            start=max(BREAKOUT_LOOKBACK,len(r5)-(RETEST_BARS+1))
             for bidx in range(len(r5)-2,start-1,-1):
                 setup=self._breakout(r5,bidx,direction,atrs)
                 if not setup:continue
@@ -280,14 +280,14 @@ class TrendBreakoutRetestV1:
                 ref=float(r5[tidx]["close"]); atr=setup["atr"]
                 entry=quote["ask"] if direction=="LONG" else quote["bid"]
                 if direction=="LONG":
-                    if entry>ref+0.15*atr:continue
+                    if entry>ref+CHASE_ATR*atr:continue
                     sl=min(float(x["low"]) for x in r5[bidx+1:tidx+1])-0.15*atr; d=entry-sl
-                    vlo,vhi=ref-999*atr,ref+0.15*atr
+                    vlo,vhi=ref-999*atr,ref+CHASE_ATR*atr
                 else:
-                    if entry<ref-0.15*atr:continue
+                    if entry<ref-CHASE_ATR*atr:continue
                     sl=max(float(x["high"]) for x in r5[bidx+1:tidx+1])+0.15*atr; d=sl-entry
-                    vlo,vhi=ref-0.15*atr,ref+999*atr
-                if d<0.50*atr or d>1.80*atr:continue
+                    vlo,vhi=ref-CHASE_ATR*atr,ref+999*atr
+                if d<MIN_STOP_ATR*atr or d>MAX_STOP_ATR*atr:continue
                 cost=await self._cost(symbol,direction,entry,quote,product)
                 if not cost:continue
                 c=cost["total"]
@@ -302,7 +302,7 @@ class TrendBreakoutRetestV1:
                 if qty<=0:continue
                 if sid in self.emitted and time.time()-self.emitted[sid]<DUPLICATE_SECONDS:continue
                 reason=(f"15M trend pass ADX {trend_meta.get('adx',0):.1f}; 5M breakout+retest; "
-                        f"vol {setup['vol']/max(setup['vol_avg'],1e-12):.2f}x; cost {c/d*100:.1f}% of D")
+                        f"vol {setup['vol']/max(setup['vol_avg'],1e-12):.2f}x; cost {c/d*100:.1f}% of D; adaptive TBR")
                 sig=Signal(symbol,direction,sid,tstart,btime,ref,entry,vlo,vhi,sl,t1,t2,d,c,net_risk,atr,setup["level"],warmup,cost["fee_rate"],quote["spread"],qty,risk_budget,reason)
                 return sig,"VALID","valid setup"
         return None,"NO_SIGNAL","no completed breakout-retest setup"
@@ -311,7 +311,7 @@ class TrendBreakoutRetestV1:
         exp=datetime.fromtimestamp(s.trigger_time+600,timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         trig=datetime.fromtimestamp(s.trigger_time+300,timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         vr=(f"<= {s.valid_high:,.2f}" if s.direction=="LONG" else f">= {s.valid_low:,.2f}")
-        warm="WARMUP_18" if s.warmup else "FULL_HISTORY"
+        warm="FAST_START" if s.warmup else "FULL_HISTORY_180"
         return (f"🚀 *{STRATEGY}*\n\nSYMBOL: *{s.symbol}*\nDIRECTION: *{s.direction}*\nSETUP ID: `{s.setup_id}`\n"
                 f"TRIGGER TIME UTC: `{trig}`\nREFERENCE ENTRY: `{s.reference_entry:,.2f}`\nVALID ENTRY RANGE: `{vr}`\n"
                 f"CANDIDATE ENTRY: `{s.entry:,.2f}`\nSL: `{s.sl:,.2f}`\nT1: `{s.t1:,.2f}`\nT2: `{s.t2:,.2f}`\n"
