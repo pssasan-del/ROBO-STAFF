@@ -308,17 +308,15 @@ class TrendBreakoutRetestV1:
         return None,"NO_SIGNAL","no completed breakout-retest setup"
 
     def format_signal(self,s:Signal):
-        exp=datetime.fromtimestamp(s.trigger_time+600,timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        trig=datetime.fromtimestamp(s.trigger_time+300,timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        vr=(f"<= {s.valid_high:,.2f}" if s.direction=="LONG" else f">= {s.valid_low:,.2f}")
-        warm="FAST_START" if s.warmup else "FULL_HISTORY_180"
-        return (f"🚀 *{STRATEGY}*\n\nSYMBOL: *{s.symbol}*\nDIRECTION: *{s.direction}*\nSETUP ID: `{s.setup_id}`\n"
-                f"TRIGGER TIME UTC: `{trig}`\nREFERENCE ENTRY: `{s.reference_entry:,.2f}`\nVALID ENTRY RANGE: `{vr}`\n"
-                f"CANDIDATE ENTRY: `{s.entry:,.2f}`\nSL: `{s.sl:,.2f}`\nT1: `{s.t1:,.2f}`\nT2: `{s.t2:,.2f}`\n"
-                f"ESTIMATED NET RR: `1:1.85 / 1:2.30`\nESTIMATED COST: `{s.cost:.4f}` price-units\n"
-                f"EXPIRY TIME: `{exp}`\nSTATUS: *VALID*\nREASON: {s.reason}\n"
-                f"History mode: *{warm}* | Paper qty: `{s.paper_qty:g}` | Risk budget: `${s.risk_budget:.2f}`\n\n"
-                "🧪 Paper tracking: T1 50% → cost-BE → T2; 6×5m time exit.\n📡 *SIGNAL ONLY — NO ORDER EXECUTED*")
+        exp=datetime.fromtimestamp(s.trigger_time+600,timezone.utc).strftime("%H:%M UTC")
+        return (
+            f"⚡ *TBR V1 — {s.symbol} {s.direction}*\n"
+            f"Entry: \`{s.entry:,.2f}\` | SL: \`{s.sl:,.2f}\`\n"
+            f"T1: \`{s.t1:,.2f}\` | T2: \`{s.t2:,.2f}\`\n"
+            f"RR: \`1:1.85 / 1:2.30\` | Valid till: \`{exp}\`\n"
+            f"Reason: {s.reason}\n"
+            "📡 *SIGNAL ONLY*"
+        )
 
     async def _resolve_trade(self,symbol,outcome,exit_px):
         tr=self.active.pop(symbol,None)
