@@ -611,24 +611,15 @@ class DeltaAutoSignalEngine:
         return out
 
     def format_signal(self,c):
-        m=c.market or {}; bid=m.get('bid');ask=m.get('ask');spread=m.get('spread_pct');delta=m.get('delta');mte=m.get('minutes_to_expiry')
-        ai_disagree = ''
-        if str(c.ai_status).startswith('REJECT'):
-            ai_disagree = f"\n⚠️ AI DISAGREEMENT: *{c.ai_status}* — deterministic hard gates still passed."
-        usym={'BTC':'BTCUSD','ETH':'ETHUSD','GOLD':'XAUTUSD'}[c.underlying];snap=self.last_scan.get(usym,{})
-        cross=(snap.get('ema_cross_5m') or {}).get('bars_ago');tf=snap.get('tf') or {};s5=tf.get('5m') or {};s15=tf.get('15m') or {};s1h=tf.get('1h') or {}
+        m=c.market or {}
         return (
-            f"🔥 *ROBO STAFF — DELTA V3.2*\n\n*{c.action}* — `{c.option_symbol}`\n"
-            f"Direction: *{c.direction}* | Quality: *{c.quality}*\nPython: `{c.score}/100` | AI-adjusted view: `{c.adjusted_score}`\n"
-            f"🤖 AI: *{c.ai_status}*{(' — '+c.ai_reason) if c.ai_reason else ''}{ai_disagree}\n\n"
-            f"Pattern: *5m {c.pattern}* | EMA5/9: `{cross} bar ago`\nStructure: `{snap.get('structure')}`\n"
-            f"1H: `{s1h.get('trend')}` | 15m: `{s15.get('trend')}`\nADX: `{float(s5.get('adx') or 0):.1f}` | RVOL: `{float(s5.get('rel_volume') or 0):.2f}`\n"
-            f"Daily Zone: `{snap.get('daily_zone')}` | 5m Zone: `{snap.get('five_zone')}`\n\n"
-            f"Executable Entry ({m.get('entry_source')}): `{c.premium:.6g}`\nBid/Ask: `{bid:.6g}` / `{ask:.6g}` | Spread: `{spread:.2f}%`\n"
-            f"SL: `{c.sl:.6g}` ({m.get('risk_pct',0):.1f}% risk band)\nT1: `{c.t1:.6g}` | T2: `{c.t2:.6g}` | T3: `{c.t3:.6g}`\nR:R T1: `1:{c.rr:.2f}`\n"
-            f"Contract: `{m.get('otm_distance')} OTM` | Rank: `{m.get('contract_rank_score',0):.1f}` | Delta: `{delta if delta is not None else 'n/a'}`\n"
-            f"OI: `{m.get('oi',0):.0f}` | Volume: `{m.get('volume',0):.0f}` | Expiry: `{mte:.0f}m`\n\n"
-            f"Why this signal: {m.get('why')}\n\n📡 *SIGNAL ONLY — NO ORDER EXECUTED*"
+            f"🔥 *V7.1 {c.action}* — *{c.underlying} {c.direction}*\n"
+            f"Contract: \`{c.option_symbol}\` | Quality: *{c.quality}* ({c.adjusted_score}/100)\n"
+            f"Entry: \`{c.premium:.6g}\` | SL: \`{c.sl:.6g}\`\n"
+            f"T1: \`{c.t1:.6g}\` | T2: \`{c.t2:.6g}\` | T3: \`{c.t3:.6g}\`\n"
+            f"RR: \`1:{c.rr:.2f}\` | Pattern: *{c.pattern}*\n"
+            f"Reason: {m.get('why') or c.reason}\n"
+            "📡 *SIGNAL ONLY*"
         )
 
     @staticmethod
